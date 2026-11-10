@@ -39,6 +39,7 @@ class App(tk.Tk):
         self.entry = ttk.Entry(top, textvariable=self.vin_var, font=("Consolas", 12))
         self.entry.pack(side="left", fill="x", expand=True, padx=8)
         self.entry.bind("<Return>", lambda e: self.start())
+        self.vin_var.trace_add("write", self.on_vin_edit)
         self.btn = ttk.Button(top, text="Look up", command=self.start)
         self.btn.pack(side="left")
         self.refresh_var = tk.BooleanVar(value=False)
@@ -46,6 +47,13 @@ class App(tk.Tk):
             side="left", padx=(10, 0))
         self.csv_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="Also save CSV", variable=self.csv_var).pack(side="left", padx=(10, 0))
+        self.min_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="Keep browser minimized", variable=self.min_var).pack(
+            side="left", padx=(10, 0))
+
+        self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10, "bold"), anchor="w",
+                                 fg="#666666", padx=62)
+        self.vin_hint.pack(fill="x")
 
         body = ttk.Panedwindow(self, orient="horizontal")
         body.pack(fill="both", expand=True, padx=10)
@@ -69,16 +77,25 @@ class App(tk.Tk):
         self.filter_var.trace_add("write", lambda *a: self.fill())
         ttk.Entry(frow, textvariable=self.filter_var, width=28).pack(side="left", padx=6)
         ttk.Button(frow, text="Copy codes", command=self.copy_codes).pack(side="left")
-        cols = ("code", "category", "description")
+        self.cluster_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frow, text="Cluster RPOs only", style="Toolbutton",
+                        variable=self.cluster_var, command=self.fill).pack(side="left", padx=10)
+        self.count = ttk.Label(frow, text="")
+        self.count.pack(side="left")
         tf = ttk.Frame(right)
         tf.pack(fill="both", expand=True, padx=(10, 0))
-        self.tree = ttk.Treeview(tf, columns=cols, show="headings")
-        for c, w in zip(cols, (70, 90, 560)):
-            self.tree.heading(c, text=c.title())
-            self.tree.column(c, width=w, stretch=(c == "description"), anchor="w")
-        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
+        self.table = tk.Text(tf, wrap="word", cursor="arrow", borderwidth=1, relief="solid",
+                             padx=8, pady=6, spacing1=2, spacing3=2, tabs=("64p",),
+                             font=("Segoe UI", 10))
+        self.table.tag_configure("row", lmargin2="64p")
+        self.table.tag_configure("code", font=("Consolas", 13, "bold"), foreground="#111111")
+        self.table.tag_configure("cluster", foreground="#0b5cad")
+        self.table.tag_configure("cat", font=("Segoe UI", 8), foreground="#9a9a9a")
+        self.table.tag_configure("note", font=("Segoe UI", 9, "italic"), foreground="#8a5a00",
+                                 lmargin2=0)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.table.yview)
+        self.table.configure(yscrollcommand=sb.set, state="disabled")
+        self.table.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         body.add(right, weight=1)
 
@@ -108,21 +125,73 @@ class App(tk.Tk):
                               f"{len(r['codes'])} RPO codes, looked up {r.get('lookup_date')}")
         self.fill()
 
-    def fill(self):
-        self.tree.delete(*self.tree.get_children())
+    def visible_codes(self):
         if not self.current:
-            return
+            return []
         needle = self.filter_var.get().strip().lower()
-        for c in self.current["codes"]:
-            if needle and needle not in f"{c['code']} {c['category']} {c['description']}".lower():
-                continue
-            self.tree.insert("", "end", values=(c["code"], c["category"], c["description"]))
+        only = self.cluster_var.get()
+        return [c for c in self.current["codes"]
+                if (not only or c["code"] in vin_rpo.CLUSTER_RPOS)
+                and (not needle or needle in f"{c['code']} {c['category']} {c['description']}".lower())]
+
+    def fill(self):
+        t = self.table
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        if self.current:
+            only = self.cluster_var.get()
+            rows = self.visible_codes()
+            n_cluster = len(vin_rpo.cluster_codes(self.current))
+            self.count.config(text=f"{len(rows)} shown · {n_cluster} cluster-relevant "
+                                   f"of {len(self.current['codes'])}")
+            if only:
+                attrs = self.current.get("major_attributes") or {}
+                t.insert("end", "Engine and transmission RPOs (LV3, MYC, ...) are not in this "
+                                "site's option list, only as text: "
+                                f"{attrs.get('Engine', '?')} / {attrs.get('Transmission', '?')}. "
+                                "Check those codes yourself.\n", "note")
+                if not rows:
+                    t.insert("end", "None of the cluster-relevant RPOs are in this VIN's list.\n", "note")
+            for c in rows:
+                tags = ("code", "cluster", "row") if c["code"] in vin_rpo.CLUSTER_RPOS else ("code", "row")
+                t.insert("end", c["code"], tags)
+                t.insert("end", "\t" + c["description"], ("row",))
+                t.insert("end", "   " + c["category"].lower() + "\n", ("cat", "row"))
+        else:
+            self.count.config(text="")
+        t.configure(state="disabled")
+
+    def on_vin_edit(self, *_):
+        raw = self.vin_var.get()
+        up = raw.upper()
+        if up != raw:
+            pos = self.entry.index("insert")
+            self.vin_var.set(up)  # does not re-fire this trace
+            self.entry.icursor(pos)
+        toks = up.replace(",", " ").split()
+        if not toks:
+            return self.vin_hint.config(text="0 / 17", fg="#666666")
+        parts, ok = [], True
+        for v in toks:
+            bad = "".join(sorted({c for c in v if c not in vin_rpo._TRANSLIT}))
+            if bad:
+                parts.append(f"{len(v)} / 17  ✖ '{bad}' not allowed in a VIN"); ok = False
+            elif len(v) < 17:
+                parts.append(f"{len(v)} / 17  ✖ {17 - len(v)} more needed"); ok = False
+            elif len(v) > 17:
+                parts.append(f"{len(v)} / 17  ✖ {len(v) - 17} too many"); ok = False
+            elif vin_rpo.vin_check_digit(v) != v[8]:
+                parts.append("17 / 17  ✖ check digit wrong - typo somewhere"); ok = False
+            else:
+                parts.append("17 / 17  ✔")
+        self.vin_hint.config(text="     ".join(parts), fg="#1a7f37" if ok else "#c62828")
 
     def copy_codes(self):
         if self.current:
             self.clipboard_clear()
-            self.clipboard_append(" ".join(c["code"] for c in self.current["codes"]))
-            self.status.set("RPO codes copied to the clipboard.")
+            codes = [c["code"] for c in self.visible_codes()]
+            self.clipboard_append(" ".join(codes))
+            self.status.set(f"{len(codes)} RPO codes copied to the clipboard.")
 
     def open_folder(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -143,9 +212,10 @@ class App(tk.Tk):
         self.busy = True
         self.btn.config(state="disabled")
         threading.Thread(target=self.work, daemon=True,
-                         args=(vins, self.refresh_var.get(), self.csv_var.get())).start()
+                         args=(vins, self.refresh_var.get(), self.csv_var.get(),
+                               self.min_var.get())).start()
 
-    def work(self, vins, refresh, want_csv):
+    def work(self, vins, refresh, want_csv, minimized=False):
         """Runs off the UI thread. Talks to the UI only through self.q."""
         say = lambda *m: self.q.put(m)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -168,23 +238,24 @@ class App(tk.Tk):
                                "  playwright install chrome")
         try:
             with sync_playwright() as pw:
-                ctx, page = vin_rpo.open_browser(pw)
+                ctx, page = vin_rpo.open_browser(pw, minimized=minimized)
                 try:
                     for i, vin in enumerate(todo):
                         if i:
                             say("status", f"Pausing {PAUSE_S:.0f} s before {vin}...")
                             time.sleep(PAUSE_S)
-                        say("status", f"Looking up {vin} in Chrome...")
+                        say("status", f"Looking up {vin} in the browser...")
                         try:
                             r = vin_rpo.lookup_live(page, vin)
                         except vin_rpo.BlockedError as e:
+                            vin_rpo.set_window_state(page, "normal")
                             gate = threading.Event()
                             say("blocked", gate,
                                 f"Stopped at {vin}: {e}\n\nThe site is asking for something this "
                                 "tool will not do (CAPTCHA / block page / login). Finish this "
-                                "lookup by hand in the Chrome window that is open.\n\n"
+                                "lookup by hand in the browser window that just came up.\n\n"
                                 f"Not looked up: {' '.join(todo[i:])}\n\n"
-                                "Click OK when you are done to close that Chrome window.")
+                                "Click OK when you are done to close that browser window.")
                             gate.wait()
                             return say("done", None)
                         except vin_rpo.NoResultError as e:
@@ -227,5 +298,24 @@ class App(tk.Tk):
         self.after(100, self.pump)
 
 
+def selftest() -> None:
+    """--selftest: check the bundled Playwright can start a browser. Opens about:blank only."""
+    out = vin_rpo.DATA_DIR / "selftest.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            ctx, page = vin_rpo.open_browser(pw, minimized=True)
+            page.goto("about:blank")
+            msg = f"ok: browser started ({ctx.browser.version if ctx.browser else 'persistent context'})"
+            ctx.close()
+    except Exception as e:
+        msg = f"FAILED: {e}"
+    out.write_text(msg, encoding="utf-8")
+
+
 if __name__ == "__main__":
-    App().mainloop()
+    if "--selftest" in sys.argv:
+        selftest()
+    else:
+        App().mainloop()

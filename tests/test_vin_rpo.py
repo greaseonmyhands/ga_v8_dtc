@@ -99,6 +99,14 @@ class HtmlFixture(unittest.TestCase):
             vin_rpo.parse_html("<html><body><div class='vin-decoder-sr'></div></body></html>")
 
 
+class Cluster(unittest.TestCase):
+    def test_subset(self):
+        r = vin_rpo.parse_html(FIXTURE.read_text(encoding="utf-8"))
+        self.assertEqual([c["code"] for c in vin_rpo.cluster_codes(r)], ["AXK"])
+        self.assertEqual(len(vin_rpo.CLUSTER_RPOS), 99)
+        self.assertTrue(all(len(c) == 3 for c in vin_rpo.CLUSTER_RPOS))
+
+
 class ApiJson(unittest.TestCase):
     PAYLOAD = {"url": None, "code": 0, "message": None, "data": {"vinInfos": [{
         "vehicleInfo": "2014 Light Truck Silverado",

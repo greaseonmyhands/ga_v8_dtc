@@ -1,6 +1,9 @@
 # vin_rpo: real VIN output, browser profile, captures
 data/vin_rpo/
 tools/vin_rpo/.profile/
+dist/
+build/
+*.spec
 *.har
 cookies*.json
 cookies*.txt

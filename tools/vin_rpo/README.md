@@ -38,6 +38,23 @@ Python on your machine). Type one or more VINs, press Enter, and the codes show 
 table. Saved VINs are listed on the left and open without a lookup. It uses the same code, cache
 folder and stop-on-block behaviour as the command line.
 
+Window features: the VIN box forces capitals and shows a live `n / 17` count (red until the
+VIN is complete and its check digit is right); **Cluster RPOs only** narrows the table to the
+codes the gauge-cluster XML files reference (list in `CLUSTER_RPOS` in `vin_rpo.py`; the CLI
+has `--cluster`). The site lists engine and transmission only as text, not as RPO codes
+(no `LV3` / `MYC` rows), so check those yourself.
+
+**Keep browser minimized** (CLI: `--minimized`) minimizes the real browser window during a
+lookup and brings it back if the site needs you. It is not headless mode.
+
+## Standalone exe
+
+`tools\vin_rpo\build_exe.bat` builds `dist\VIN RPO Lookup.exe` (`pip install pyinstaller`
+first). The exe needs no Python on the target PC, but it does need Google Chrome or Microsoft
+Edge installed (Chrome is tried first; Edge ships with Windows 10/11). It saves results in a
+`vin_rpo_data` folder beside the exe and keeps its browser profile in
+`%LOCALAPPDATA%\vin_rpo\profile`.
+
 ## Output
 
 ```json
