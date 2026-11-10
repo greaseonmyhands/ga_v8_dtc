@@ -1,0 +1,10 @@
+# vin_rpo: real VIN output, browser profile, captures
+data/vin_rpo/
+tools/vin_rpo/.profile/
+*.har
+cookies*.json
+cookies*.txt
+storage_state*.json
+
+__pycache__/
+*.pyc
