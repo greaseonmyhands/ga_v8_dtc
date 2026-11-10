@@ -31,6 +31,13 @@ python tools/vin_rpo/vin_rpo.py --from-html page.html # parse a saved results pa
 Exit codes: `0` ok, `1` a VIN had no result, `2` bad input / Playwright missing, `3` stopped
 because the site showed a block page.
 
+## Window app
+
+Double-click `tools/vin_rpo/VIN RPO Lookup.bat` (or `vin_rpo_gui.pyw` if `.pyw` files open with
+Python on your machine). Type one or more VINs, press Enter, and the codes show in a filterable
+table. Saved VINs are listed on the left and open without a lookup. It uses the same code, cache
+folder and stop-on-block behaviour as the command line.
+
 ## Output
 
 ```json
