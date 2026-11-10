@@ -51,7 +51,7 @@ class App(tk.Tk):
         ttk.Checkbutton(top, text="Keep browser minimized", variable=self.min_var).pack(
             side="left", padx=(10, 0))
 
-        self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10, "bold"), anchor="w",
+        self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10), anchor="w",
                                  fg="#666666", padx=62)
         self.vin_hint.pack(fill="x")
 
@@ -70,6 +70,13 @@ class App(tk.Tk):
         self.head = ttk.Label(right, text="Enter a 17-character GM VIN and press Enter.",
                               wraplength=700, justify="left")
         self.head.pack(anchor="w", padx=(10, 0))
+        # Engine / transmission: the site gives these only as text (no RPO rows), so make
+        # them stand out.
+        self.power = ttk.Label(right, text="", wraplength=700, justify="left",
+                               font=("Segoe UI", 11, "bold"))
+        self.power.pack(anchor="w", padx=(10, 0), pady=(4, 2))
+        self.sub = ttk.Label(right, text="", wraplength=700, justify="left")
+        self.sub.pack(anchor="w", padx=(10, 0))
         frow = ttk.Frame(right)
         frow.pack(fill="x", padx=(10, 0), pady=6)
         ttk.Label(frow, text="Filter:").pack(side="left")
@@ -120,9 +127,14 @@ class App(tk.Tk):
 
     def show(self, r: dict):
         self.current = r
-        attrs = "\n".join(f"{k}: {v}" for k, v in (r.get("major_attributes") or {}).items())
-        self.head.config(text=f"{r['vin']}   {r.get('vehicle') or ''}\n{attrs}\n"
-                              f"{len(r['codes'])} RPO codes, looked up {r.get('lookup_date')}")
+        attrs = dict(r.get("major_attributes") or {})
+        engine = attrs.pop("Engine", None) or "not listed"
+        trans = attrs.pop("Transmission", None) or "not listed"
+        self.head.config(text=f"{r['vin']}   {r.get('vehicle') or ''}")
+        self.power.config(text=f"Engine:  {engine}\nTransmission:  {trans}")
+        rest = [f"{k}: {v}" for k, v in attrs.items()]
+        rest.append(f"{len(r['codes'])} RPO codes, looked up {r.get('lookup_date')}")
+        self.sub.config(text="   ·   ".join(rest))
         self.fill()
 
     def visible_codes(self):
@@ -184,7 +196,7 @@ class App(tk.Tk):
                 parts.append("17 / 17  ✖ check digit wrong - typo somewhere"); ok = False
             else:
                 parts.append("17 / 17  ✔")
-        self.vin_hint.config(text="     ".join(parts), fg="#1a7f37" if ok else "#c62828")
+        self.vin_hint.config(text="     ".join(parts), fg="#1a7f37" if ok else "#000000")
 
     def copy_codes(self):
         if self.current:
