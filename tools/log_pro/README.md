@@ -9,6 +9,9 @@ table, filter, pause, overwrite view, Start/Stop logging, the send box and the s
   Scanner export, so VCM Scanner can open it.
 - **Controls**: the CAN display's bidirectional controls (GM DeviceControl `$AE`).
 
+The Send frame / Script section starts folded away: **Enable transmit** stays at the
+bottom left, and the **▸ Send frame / Script** button opens the rest.
+
 Start it with `LOG PRO.bat` (source, 32-bit Python) or `dist\LOG PRO.exe`
 (build it with `build_exe.bat`).
 

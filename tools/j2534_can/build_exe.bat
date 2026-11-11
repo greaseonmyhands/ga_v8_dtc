@@ -5,6 +5,7 @@ cd /d "%~dp0..\.."
 py -3.12-32 -m PyInstaller --noconfirm --onefile --windowed --name "CAN PRO" ^
   --icon "%CD%\tools\j2534_can\can_pro.ico" ^
   --add-data "%CD%\tools\j2534_can\can_pro.ico;." ^
+  --add-data "%CD%\tools\j2534_can\can_pro_*.png;." ^
   --add-data "%CD%\tools\j2534_can\examples;examples" ^
   --paths tools\j2534_can ^
   --distpath dist --workpath build\j2534_can --specpath build ^

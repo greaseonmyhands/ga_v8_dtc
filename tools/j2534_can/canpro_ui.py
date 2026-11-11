@@ -47,6 +47,7 @@ class App(tk.Tk):
     TITLE = "CAN PRO"
     MARK = ("CAN", "PRO")              # wordmark, top left
     ICON = HERE / "can_pro.ico"
+    TOOLS_OPEN = True        # Send frame / Script section shown when the window opens
     SIZE = (1040, 700)
 
     def __init__(self, data_dir: Path | None = None, detect: bool = True):
@@ -56,10 +57,7 @@ class App(tk.Tk):
         k = self.winfo_fpixels("1i") / 96.0   # the exe is DPI-aware: scale pixel sizes
         self.geometry(f"{int(self.SIZE[0] * k)}x{int(self.SIZE[1] * k)}")
         self.minsize(int(820 * k), int(520 * k))
-        try:
-            self.iconbitmap(str(self.ICON))
-        except tk.TclError:
-            pass
+        self.set_icon()
         self.q: queue.Queue = queue.Queue()
         self.session: canlog.Session | None = None
         self.runner: canlog.ScriptRunner | None = None
@@ -123,12 +121,14 @@ class App(tk.Tk):
         ttk.Button(row, text="Clear", width=7, command=self.clear).pack(side="left")
         self.log_btn = ttk.Button(row, text="Start logging", width=13, command=self.toggle_log)
         self.log_btn.pack(side="left", padx=(6, 0))
+        self.log_options(row)
         ttk.Button(row, text="Open log folder", command=self.open_folder).pack(side="left", padx=6)
-        self.count = ttk.Label(row, text="")
-        self.count.pack(side="left", padx=6)
-        self.filter_hint = tk.Label(self, text="", font=("Segoe UI", 9), anchor="w", fg="#000000",
-                                    padx=10)
-        self.filter_hint.pack(fill="x")
+        hint_row = ttk.Frame(self, padding=(10, 2, 10, 0))
+        hint_row.pack(fill="x")
+        self.count = ttk.Label(hint_row, text="")       # right-hand side, so a wide toolbar never hides it
+        self.count.pack(side="right")
+        self.filter_hint = tk.Label(hint_row, text="", font=("Segoe UI", 9), anchor="w", fg="#000000")
+        self.filter_hint.pack(side="left", fill="x", expand=True)
 
         # ------------------------------------------------- status (packed first so it stays)
         self.status = tk.StringVar(value="Ready. Receive only until you enable transmit.")
@@ -137,17 +137,23 @@ class App(tk.Tk):
         ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x")
 
         # ------------------------------------------------------------ bottom tabs
-        self.tabs = ttk.Notebook(self)
-        self.tabs.pack(side="bottom", fill="x", padx=10, pady=(6, 8))
+        # Enable transmit and the show/hide switch stay visible; the tabs fold away.
+        self.tools_box = ttk.Frame(self, padding=(10, 4, 10, 6))
+        self.tools_box.pack(side="bottom", fill="x")
+        bar = ttk.Frame(self.tools_box)
+        bar.pack(fill="x")
+        self.tx_btn = ttk.Button(bar, text="Enable transmit", width=18, command=self.toggle_tx,
+                                 state="disabled")
+        self.tx_btn.pack(side="left")
+        self.tools_btn = ttk.Button(bar, text="", width=26, command=self.toggle_tools)
+        self.tools_btn.pack(side="left", padx=8)
+        self.tabs = ttk.Notebook(self.tools_box)
 
         send = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(send, text="Send frame")
         line = ttk.Frame(send)
         line.pack(fill="x")
-        self.tx_btn = ttk.Button(line, text="Enable transmit", width=18, command=self.toggle_tx,
-                                 state="disabled")
-        self.tx_btn.pack(side="left")
-        ttk.Label(line, text="Bus:").pack(side="left", padx=(14, 0))
+        ttk.Label(line, text="Bus:").pack(side="left")
         self.send_bus = tk.StringVar(value="LS")
         self.send_bus_box = ttk.Combobox(line, textvariable=self.send_bus, state="readonly",
                                          width=4, values=("LS", "HS"))
@@ -189,6 +195,7 @@ class App(tk.Tk):
         self.preview.configure(yscrollcommand=psb.set, state="disabled")
         self.preview.pack(side="left", fill="both", expand=True)
         psb.pack(side="right", fill="y")
+        self.show_tools(self.TOOLS_OPEN)
 
         # ------------------------------------------------------------ frame table
         self.ui_scale = k
@@ -281,6 +288,7 @@ class App(tk.Tk):
             self.send_bus.set(bus)
             self.id_var.set(fid)
             self.data_var.set(data)
+            self.show_tools(True)
             self.tabs.select(0)
         return self.popup(event, [
             ("Copy row" + ("s" if len(sel) > 1 else ""), self.copy_rows, bool(sel)),
@@ -508,6 +516,40 @@ class App(tk.Tk):
     def extra_log_stop(self):
         """Stop any additional log. Returns 'name (N rows)' if one was written, else None."""
         return None
+
+    def log_options(self, row):
+        """Hook: extra logging controls placed right after the Start logging button."""
+
+    def set_icon(self):
+        """Window and taskbar icon. The .ico alone gives Windows a small image that looks
+        blurry on the taskbar, so the PNG sizes made by make_icon.py are handed over too."""
+        try:
+            self.iconbitmap(default=str(self.ICON))
+        except tk.TclError:
+            pass
+        imgs = []
+        for size in (256, 64, 48, 32, 16):
+            png = self.ICON.with_name(f"{self.ICON.stem}_{size}.png")
+            if png.exists():
+                try:
+                    imgs.append(tk.PhotoImage(file=str(png)))
+                except tk.TclError:
+                    pass
+        if imgs:
+            self._icon_imgs = imgs                  # keep references or Tk drops them
+            self.iconphoto(True, *imgs)
+
+    def toggle_tools(self):
+        self.show_tools(not self.tools_open)
+
+    def show_tools(self, show: bool):
+        self.tools_open = show
+        if show:
+            self.tabs.pack(fill="x", pady=(6, 0))
+            self.tools_btn.config(text="▾ Hide Send frame / Script")
+        else:
+            self.tabs.pack_forget()
+            self.tools_btn.config(text="▸ Send frame / Script")
 
     def extra_count_text(self) -> str:
         """Extra text for the counter beside the buttons."""

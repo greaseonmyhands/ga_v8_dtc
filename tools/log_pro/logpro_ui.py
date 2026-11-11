@@ -16,6 +16,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 HERE = Path(__file__).resolve().parent
 RES = Path(getattr(sys, "_MEIPASS", HERE))
@@ -87,12 +88,29 @@ class LogProApp(App):
     MARK = ("LOG", "PRO")
     ICON = RES / "log_pro.ico"
     SIZE = (1180, 780)
+    TOOLS_OPEN = False       # Send frame / Script folded away; rarely needed here
 
     def __init__(self, data_dir: Path | None = None, detect: bool = True):
         super().__init__(data_dir or DATA_DIR, detect)
         self.restore_settings()
 
     # ------------------------------------------------------------------- layout
+    def log_options(self, row):
+        """What Start logging saves, and the PID row interval, next to the button."""
+        ttk.Label(row, text="saves").pack(side="left", padx=(6, 0))
+        self.mode_var = tk.StringVar(value=LOG_MODES[0])
+        self.mode_box = ttk.Combobox(row, textvariable=self.mode_var, state="readonly", width=17,
+                                     values=LOG_MODES)
+        self.mode_box.pack(side="left", padx=(4, 0))
+        self.mode_box.bind("<<ComboboxSelected>>", lambda e: self.save_settings())
+        ttk.Label(row, text="PID row every").pack(side="left", padx=(8, 0))
+        self.interval_var = tk.StringVar(value="100")
+        self.interval_box = ttk.Combobox(row, textvariable=self.interval_var, state="readonly",
+                                         width=5, values=INTERVALS_MS)
+        self.interval_box.pack(side="left", padx=(4, 0))
+        self.interval_box.bind("<<ComboboxSelected>>", lambda e: self.save_settings())
+        ttk.Label(row, text="ms").pack(side="left", padx=(3, 0))
+
     def make_table_frame(self):
         """Called by the base window while it builds: put the CAN frame table and the PID
         side on two tabs."""
@@ -116,7 +134,11 @@ class LogProApp(App):
         self.settings_ready = False
         k = self.ui_scale
 
-        self.main_tabs = ttk.Notebook(self)
+        style = ttk.Style(self)
+        self.tab_font = tkfont.Font(family="Segoe UI Semibold", size=12)
+        style.configure("Main.TNotebook.Tab", font=self.tab_font, padding=(22, 7))
+        style.map("Main.TNotebook.Tab", foreground=[("selected", "#0b5cad")])
+        self.main_tabs = ttk.Notebook(self, style="Main.TNotebook")
         self.main_tabs.pack(fill="both", expand=True, padx=10)
         can_tab = ttk.Frame(self.main_tabs, padding=(0, 6, 0, 0))
         self.main_tabs.add(can_tab, text="CAN bus")
@@ -140,25 +162,12 @@ class LogProApp(App):
         self.dbc_label = ttk.Label(row, text="No DBC loaded. Load one to list its signals.")
         self.dbc_label.pack(side="left", padx=10)
 
-        # --- row 2: logging choice
+        # --- row 2: polling
         row = ttk.Frame(pid_tab)
         row.pack(fill="x", pady=(8, 0))
-        ttk.Label(row, text="Start logging saves:").pack(side="left")
-        self.mode_var = tk.StringVar(value=LOG_MODES[0])
-        self.mode_box = ttk.Combobox(row, textvariable=self.mode_var, state="readonly", width=19,
-                                     values=LOG_MODES)
-        self.mode_box.pack(side="left", padx=6)
-        self.mode_box.bind("<<ComboboxSelected>>", lambda e: self.save_settings())
-        ttk.Label(row, text="PID row every").pack(side="left", padx=(10, 0))
-        self.interval_var = tk.StringVar(value="100")
-        self.interval_box = ttk.Combobox(row, textvariable=self.interval_var, state="readonly",
-                                         width=5, values=INTERVALS_MS)
-        self.interval_box.pack(side="left", padx=6)
-        self.interval_box.bind("<<ComboboxSelected>>", lambda e: self.save_settings())
-        ttk.Label(row, text="ms").pack(side="left")
         self.poll_btn = ttk.Button(row, text="Start polling", width=14, command=self.toggle_poll,
                                    state="disabled")
-        self.poll_btn.pack(side="left", padx=(16, 0))
+        self.poll_btn.pack(side="left")
         self.poll_speed = tk.StringVar(value=POLL_SPEEDS[0])
         ttk.Combobox(row, textvariable=self.poll_speed, state="readonly", width=10,
                      values=POLL_SPEEDS).pack(side="left", padx=6)
@@ -806,7 +815,7 @@ class LogProApp(App):
         if not (s and s.running and "HS" in s.buses):
             return self.status.set("Start a capture with the HS bus first.")
         if not s.tx_enabled:
-            return self.status.set("Turn on Enable transmit (Send frame tab) first.")
+            return self.status.set("Turn on Enable transmit (bottom left) first.")
         speed = self.safety_value("vehSpeed")
         why = ctl.interlock(c, speed, self.safety_value("engRpm"), self.safety_value("transGearCmd"))
         if why:
