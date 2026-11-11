@@ -45,7 +45,13 @@ def draw() -> Image.Image:
     return img
 
 
+PNG_SIZES = (256, 64, 48, 32, 16)   # the window hands these to Windows for the taskbar
+
+
 if __name__ == "__main__":
-    draw().resize((256, 256), Image.LANCZOS).save(
+    big = draw()
+    big.resize((256, 256), Image.LANCZOS).save(
         OUT, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    print("wrote", OUT)
+    for n in PNG_SIZES:
+        big.resize((n, n), Image.LANCZOS).save(OUT.with_name(f"{OUT.stem}_{n}.png"))
+    print("wrote", OUT, "and", len(PNG_SIZES), "PNGs")

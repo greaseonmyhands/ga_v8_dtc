@@ -3,6 +3,9 @@ data/vin_rpo/
 # j2534_can: captured CAN logs from vehicles
 data/j2534_can/
 can_logs/
+# log_pro: captured CAN and PID logs
+data/log_pro/
+log_pro_logs/
 tools/vin_rpo/.profile/
 dist/
 build/

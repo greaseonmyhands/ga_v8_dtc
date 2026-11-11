@@ -280,10 +280,22 @@ class SimBackend:
         if bus not in self.buses:
             raise BusError(f"{bus} is not open")
         self.sent.append((bus, arb_id, ext, bytes(data), hv))
-        if bus == "HS" and arb_id == 0x7E0 and not ext and len(data) >= 2:
-            reply = bytes([0x06, (data[1] + 0x40) & 0xFF, data[2] if len(data) > 2 else 0,
+        resp = {0x7E0: 0x7E8, 0x7E2: 0x7EA, 0x241: 0x641}.get(arb_id)
+        if bus != "HS" or ext or resp is None or len(data) < 2:
+            return
+        sid = data[1]
+        if sid == 0x22 and len(data) >= 4:          # ReadDataByIdentifier: two made-up bytes
+            reply = bytes([0x05, 0x62, data[2], data[3], 0x12, 0x34, 0x00, 0x00])
+        elif sid == 0xAE:                           # DeviceControl: accept any CPID
+            reply = bytes([0x02, 0xEE, data[2] if len(data) > 2 else 0, 0, 0, 0, 0, 0])
+        elif sid in (0x20, 0x3E):                   # ReturnToNormal / TesterPresent
+            reply = bytes([0x01, sid + 0x40, 0, 0, 0, 0, 0, 0])
+        elif arb_id == 0x7E0:                       # OBD request (Mode 01 and the like)
+            reply = bytes([0x06, (sid + 0x40) & 0xFF, data[2] if len(data) > 2 else 0,
                            0xBE, 0x1F, 0xA8, 0x13, 0x00])
-            self._pending.append(Frame(self.now() + 0.005, "HS", 0x7E8, False, reply))
+        else:
+            return
+        self._pending.append(Frame(self.now() + 0.005, "HS", resp, False, reply))
 
     def close(self):
         self.buses = ()
@@ -311,6 +323,9 @@ class Session:
         self.start_wall = time.time()       # wall-clock time of frame time 0
         self._log_lock = threading.Lock()
         self.tx_enabled = False
+        self.poll_enabled = False           # LOG PRO's "Start polling": diagnostic requests only
+        self.send_errors = 0
+        self.last_send_error = ""
         self.rx_count = 0
         self.tx_count = 0
         self.notes: list[str] = []
@@ -391,6 +406,9 @@ class Session:
                         self.tx_count += 1
                     except Exception as e:
                         box["error"] = str(e)
+                        if box.get("count"):
+                            self.send_errors += 1
+                            self.last_send_error = str(e)
                     box["done"].set()
                 if got:
                     self._to_ring(got)          # waitfor sees frames at once
@@ -501,6 +519,20 @@ class Session:
             raise BusError("Timed out waiting for the device to send the frame.")
         if box["error"]:
             raise BusError(f"Send failed: {box['error']}")
+
+    def queue_send(self, bus: str, arb_id: int, ext: bool, data: bytes, poll: bool = False,
+                   finishing: bool = False) -> bool:
+        """Queue one frame without waiting (for polling and control keep-alives on the UI
+        thread). Allowed when transmit is enabled, or for poll=True when poll_enabled is set.
+        finishing=True is only for ending a control that was started while transmit was on.
+        Returns False if it was not queued. Send errors are counted in send_errors."""
+        if not (self.tx_enabled or finishing or (poll and self.poll_enabled)):
+            return False
+        if bus not in self.buses or not self.running:
+            return False
+        box = {"done": threading.Event(), "error": None, "count": True}
+        self._txq.put((bus, arb_id, ext, bytes(data), False, box))
+        return True
 
     def wait_for(self, pred, timeout: float, since_seq: int = 0, stop: threading.Event | None = None):
         """First received (not sent) frame after since_seq for which pred(frame) is true,
