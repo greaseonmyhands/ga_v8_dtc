@@ -202,8 +202,9 @@ class SimSession(unittest.TestCase):
         self.assertEqual(len(rows), n + 1)
         self.assertTrue(all(canlog.parse_candump_line(x) for x in lines))
         self.assertIn(0x10242040, {f.arb_id for f in got if f.bus == "LS"})
-        ts = [f.ts for f in got if f.bus == "HS"]
+        ts = [f.ts for f in got]                        # both buses merged in time order
         self.assertEqual(ts, sorted(ts))
+        self.assertEqual([r[0] for r in rows[1:]], [f"{t:.6f}" for t in ts])
 
     def test_logging_is_off_until_started_and_can_be_restarted(self):
         got = []
@@ -270,8 +271,10 @@ class SimSession(unittest.TestCase):
         self.assertIsNotNone(hit)
         self.assertEqual(hit.data[:3], bytes.fromhex("064100"))
         self.assertEqual(s.backend.sent, [("HS", 0x7E0, False, bytes.fromhex("0201000000000000"), False)])
-        tx = [f for f in got if f.tx]
-        self.assertEqual([(f.bus, f.arb_id) for f in tx], [("HS", 0x7E0)])
+        # two buses are open, so the listener gets frames after the short reorder hold
+        self.assertTrue(wait_until(lambda: any(f.arb_id == 0x7E8 for f in got)))
+        self.assertEqual([(f.bus, f.arb_id, f.tx) for f in got],
+                         [("HS", 0x7E0, True), ("HS", 0x7E8, False)])
 
     def test_send_on_closed_bus(self):
         s = self.open(buses=("LS",), traffic=False)

@@ -295,6 +295,11 @@ class Session:
     thread. Receive only until tx_enabled is set True by an explicit user action."""
 
     RING = 4096
+    # With two buses open the device is read one bus after the other, so frames can come
+    # back a few milliseconds out of time order. They are held this long (in frame time)
+    # and released sorted, so the screen and the log files are in time order.
+    REORDER_S = 0.05
+    REORDER_IDLE_S = 0.10      # nothing new for this long: release everything held
 
     def __init__(self, backend, buses, on_frames=None, log_factory=None, on_event=None):
         self.backend = backend
@@ -316,6 +321,9 @@ class Session:
         self._cond = threading.Condition()
         self._seq = 0
         self._ring: deque = deque(maxlen=self.RING)
+        self._held: list = []               # reorder buffer (two-bus captures only)
+        self._held_max = 0.0
+        self._held_at = 0.0
         self._thread = threading.Thread(target=self._run, daemon=True, name="can-session")
 
     # ------------------------------------------------------------------ control
@@ -371,8 +379,6 @@ class Session:
                 for bus in self.buses:
                     got.extend(self.backend.read(bus))
                 self.rx_count += len(got)
-                if len(self.buses) > 1:
-                    got.sort(key=lambda f: f.ts)   # merge the buses by time within a batch
                 while True:
                     try:
                         req = self._txq.get_nowait()
@@ -387,8 +393,11 @@ class Session:
                         box["error"] = str(e)
                     box["done"].set()
                 if got:
-                    self._dispatch(got)
-                else:
+                    self._to_ring(got)          # waitfor sees frames at once
+                out = self._reorder(got) if len(self.buses) > 1 else got
+                if out:
+                    self._deliver(out)
+                if not got:
                     time.sleep(0.002)
                 if time.monotonic() - last_flush > 1.0:
                     with self._log_lock:
@@ -402,6 +411,11 @@ class Session:
             self._stop.set()
             try:
                 self.backend.close()
+            except Exception:
+                pass
+            try:
+                if self._held:              # write out what the reorder buffer still holds
+                    self._deliver(self._reorder([], flush=True))
             except Exception:
                 pass
             with self._log_lock:   # keep self.log so callers can read what was saved
@@ -435,16 +449,39 @@ class Session:
                 log.close()
         return log
 
-    def _dispatch(self, frames):
-        with self._log_lock:
-            if self.log and not self.log.closed:
-                for f in frames:
-                    self.log.write(f)
+    def _to_ring(self, frames):
         with self._cond:
             for f in frames:
                 self._seq += 1
                 self._ring.append((self._seq, f))
             self._cond.notify_all()
+
+    def _reorder(self, frames, flush: bool = False):
+        """Add frames to the hold buffer; return, in time order, those old enough to release."""
+        now = time.monotonic()
+        if frames:
+            self._held.extend(frames)
+            self._held_max = max(self._held_max, max(f.ts for f in frames))
+            self._held_at = now
+        if not self._held:
+            return []
+        self._held.sort(key=lambda f: f.ts)       # stable: equal times keep arrival order
+        if flush or now - self._held_at > self.REORDER_IDLE_S:
+            out, self._held = self._held, []
+            return out
+        cutoff = self._held_max - self.REORDER_S
+        n = 0
+        while n < len(self._held) and self._held[n].ts <= cutoff:
+            n += 1
+        out, self._held = self._held[:n], self._held[n:]
+        return out
+
+    def _deliver(self, frames):
+        """Frames to the log files and the listener (screen)."""
+        with self._log_lock:
+            if self.log and not self.log.closed:
+                for f in frames:
+                    self.log.write(f)
         if self.on_frames:
             self.on_frames(frames)
 

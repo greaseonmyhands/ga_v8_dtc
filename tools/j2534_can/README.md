@@ -17,6 +17,7 @@ capture starts.
 | | Simulator | Autel V200 on the bench: BCM, cluster, ECM (2026-11-11) |
 |---|---|---|
 | Window: scrolling and overwrite views, filter, column sorting, pause, log files | tested | **tested** with LS + HS together: 90 IDs, about 19,000 frames logged with none dropped, window stayed responsive |
+| Start logging / Stop logging | tested | **tested** with LS + HS together: nothing saved while off; a 4 s logging run saved 5687 frames, the same frames in the same order as reached the screen, all in time order across both buses; the file stopped growing on Stop logging while the capture went on; a second run made a second pair |
 | Device list marks the attached device | - | **tested**: V200 shown as detected, listed first and selected |
 | Listing the installed J2534 devices | - | tested |
 | LS capture (receive only) | tested | **tested**: 649 frames in 5 s, 35 IDs, 29-bit and 11-bit |
@@ -125,6 +126,9 @@ logging**. The counter beside it shows `logging (N saved)` or `not logging`.
   next capture.
 - Times in the files are seconds since the capture started, so a log started part-way
   through lines up with what was on screen.
+- With LS + HS together, frames are held for 50 ms and merged by timestamp so the screen
+  and the files are in time order across both buses. Because of that hold, the start
+  and end of a logging run are accurate to about 50 ms. A single-bus capture has no hold.
 
 While logging, every frame is written as it arrives to two files named
 `can_YYYYMMDD_HHMMSS` (the time logging started):
