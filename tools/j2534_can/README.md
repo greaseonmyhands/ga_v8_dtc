@@ -14,16 +14,20 @@ capture starts.
 
 ## What has and has not been tested
 
-| | Simulator | Real hardware |
+| | Simulator | Autel V200 on a vehicle (2026-11-11) |
 |---|---|---|
-| Window, views, filter, pause, log files | tested | - |
+| Window, views, filter, pause, log files | tested | not driven through the window |
+| Listing the installed J2534 devices | - | tested |
+| LS capture (receive only) | tested | **tested**: 649 frames in 5 s, 35 IDs, 29-bit and 11-bit |
+| HS capture (receive only) | tested | **tested**: 5135 frames in 4 s, 55 IDs |
+| LS + HS together | tested | **tested**: both channels open at once, 90 IDs |
+| Device timestamps | - | **tested**: HS 0C9 averages 12.500 ms, LS 100 ms frames within 0.3 ms |
 | Send box, script runner, both example scripts | tested | **not tested** |
-| Listing the installed J2534 devices | - | tested (registry only) |
-| Opening the V200, LS capture, HS capture, LS + HS together | - | **not tested** |
 | High-voltage wake-up (`hv`) | - | **not tested** |
 
-The J2534 code follows the 04.04 and J2534-2 documents, but until it has run against the
-V200 treat the hardware side as unproven. Do the first run receive-only.
+The hardware captures were made with the console `--probe` (same capture code as the
+window). Nothing has been transmitted through real hardware yet; treat sending as unproven
+until it has been tried on a bench module.
 
 ## Running it
 
