@@ -47,11 +47,11 @@ class App(tk.Tk):
         self.vin_var.trace_add("write", self.on_vin_edit)
         self.btn = ttk.Button(top, text="Look up", command=self.start)
         self.btn.pack(side="left")
-        self.refresh_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="Refresh (ignore saved)", variable=self.refresh_var).pack(
-            side="left", padx=(10, 0))
-        self.csv_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="Also save CSV", variable=self.csv_var).pack(side="left", padx=(10, 0))
+        # Refresh: look the VIN up again even though a saved result exists.
+        self.refresh_btn = ttk.Button(top, text="Refresh data", command=lambda: self.start(refresh=True))
+        self.refresh_btn.pack(side="left", padx=(8, 0))
+        self.csv_btn = ttk.Button(top, text="Save as CSV", command=self.save_csv, state="disabled")
+        self.csv_btn.pack(side="left", padx=(8, 0))
 
         self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10), anchor="w",
                                  fg="#666666", padx=62)
@@ -200,6 +200,7 @@ class App(tk.Tk):
 
     def show(self, r: dict):
         self.current = r
+        self.csv_btn.config(state="normal")
         attrs = dict(r.get("major_attributes") or {})
         engine = attrs.pop("Engine", None) or "not listed"
         trans = attrs.pop("Transmission", None) or "not listed"
@@ -283,11 +284,29 @@ class App(tk.Tk):
         os.startfile(self.data_dir)  # Windows only
 
     # ------------------------------------------------------------------- lookup
-    def start(self):
+    def save_csv(self):
+        if not self.current:
+            return
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        path = self.data_dir / f"{self.current['vin']}.csv"
+        try:
+            vin_rpo.write_csv(self.current, path)
+        except OSError as e:  # e.g. the CSV is open in Excel
+            messagebox.showerror("Save as CSV", f"Could not write {path}\n\n{e}", parent=self)
+            return
+        self.status.set(f"Saved {path}")
+
+    def start(self, refresh=False):
         if self.busy:
             return
         raw = self.vin_var.get().replace(",", " ").split()
+        if not raw and refresh and self.current:
+            raw = [self.current["vin"]]  # Refresh with an empty box redoes the VIN on screen
         if not raw:
+            return
+        if refresh and not messagebox.askokcancel(
+                "Refresh data", "Look up " + ", ".join(v.upper() for v in raw) + " again on the "
+                "site and replace the saved result?", parent=self):
             return
         try:
             vins = list(dict.fromkeys(vin_rpo.validate_vin(v) for v in raw))
@@ -296,8 +315,8 @@ class App(tk.Tk):
             return
         self.busy = True
         self.btn.config(state="disabled")
-        threading.Thread(target=self.work, daemon=True,
-                         args=(vins, self.refresh_var.get(), self.csv_var.get())).start()
+        self.refresh_btn.config(state="disabled")
+        threading.Thread(target=self.work, daemon=True, args=(vins, refresh, False)).start()
 
     def work(self, vins, refresh, want_csv, minimized=True):
         # The browser always runs minimized here; it is restored if the site needs you.
@@ -375,6 +394,7 @@ class App(tk.Tk):
                 elif kind == "done":
                     self.busy = False
                     self.btn.config(state="normal")
+                    self.refresh_btn.config(state="normal")
                     if a[0]:
                         self.status.set(a[0].splitlines()[0])
                         messagebox.showerror("VIN lookup", a[0], parent=self)
