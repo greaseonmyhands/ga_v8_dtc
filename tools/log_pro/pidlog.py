@@ -17,7 +17,10 @@ the layout HP Tuners VCM Scanner uses for its own "Export Log File" CSV:
     0.000,<value>,<value>,...
 
 VCM Scanner's own files carry HP Tuners' internal channel numbers on the channel-id line.
-DBC signals have no such number, so they get made-up ids from FIRST_CHANNEL_ID upward.
+A PID that maps to one of those channels is written under its number, and VCM Scanner shows
+it as its own channel (gauges, charts). Any other PID is written with id 0: VCM Scanner 5.2.3
+then shows it under the name and unit from this file. (An unknown non-zero id shows as
+"Unknown: <id>" instead, so made-up ids are not used.)
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-FIRST_CHANNEL_ID = 900001
+NO_CHANNEL_ID = 0     # VCM Scanner uses the file's name and unit for these
 STYLES = ("hpt", "plain")
 
 
@@ -34,6 +37,7 @@ class Column:
     key: object          # whatever the caller uses to identify the PID
     name: str
     unit: str = ""
+    channel_id: int = 0  # HP Tuners channel id when the PID is one of theirs, else 0
 
 
 def clean(text: str) -> str:
@@ -114,7 +118,7 @@ class PidLog:
             w(f"Notes: {clean(notes)}")
             w("")
             w("[Channel Information]")
-            w(",".join(["0"] + [str(FIRST_CHANNEL_ID + i) for i in range(len(names))]))
+            w(",".join(["0"] + [str(c.channel_id or NO_CHANNEL_ID) for c in self.columns]))
             w(",".join(["Offset"] + names))
             w(",".join(["s"] + units))
             w("")

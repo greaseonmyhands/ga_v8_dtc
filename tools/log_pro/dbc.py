@@ -45,6 +45,10 @@ class Signal:
     is_float: bool = False
     choices: dict = field(default_factory=dict)   # raw value -> text
     message: "Message" = None
+    label: str = ""              # display name, when it differs from the DBC name
+    hpt_id: int = 0              # HP Tuners channel id, when the signal has one
+    poll: dict = None            # set for a polled PID: req, resp, service, ident, nbytes, interval_ms
+    enum_text: object = None     # value -> text (built-in signals)
 
     @property
     def is_integer(self) -> bool:
@@ -86,10 +90,18 @@ class Signal:
         """Value as shown on screen: number, plus the VAL_ label when there is one."""
         if value is None:
             return ""
+        if self.enum_text:
+            t = self.enum_text(value)
+            if t:
+                return f"{value:g}  ({t})"
         if isinstance(value, int):
             label = self.choices.get(value) if self.factor == 1 and self.offset == 0 else None
             return f"{value}  ({label})" if label else str(value)
         return f"{value:.6g}"
+
+    @property
+    def display_name(self) -> str:
+        return self.label or self.name
 
 
 @dataclass

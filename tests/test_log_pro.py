@@ -177,7 +177,7 @@ class PidLogFile(unittest.TestCase):
             "Notes: bench",
             "",
             "[Channel Information]",
-            "0,900001,900002,900003,900004",
+            "0,0,0,0,0",
             "Offset,Engine RPM,Gear,Engine RPM (2),Bad name",
             "s,rpm,,rpm,deg C",
             "",
