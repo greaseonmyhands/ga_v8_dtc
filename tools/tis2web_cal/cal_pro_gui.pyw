@@ -139,6 +139,9 @@ class CalPanel(ttk.Frame):
         t.tag_configure("note", font=("Segoe UI", 9, "italic"), foreground="#8a5a00",
                         lmargin1=8, lmargin2=8)
         t.tag_configure("err", foreground="#9a2a2a", lmargin1=8)
+        t.tag_configure("asked", font=("Segoe UI", 9), foreground="#1a5f2a", lmargin1=8, lmargin2=8)
+        t.tag_configure("branch", font=("Segoe UI", 10, "bold"), foreground=AMBER, lmargin1=8,
+                        spacing1=6)
         sb = ttk.Scrollbar(tf, orient="vertical", command=t.yview)
         t.configure(yscrollcommand=sb.set, state="disabled")
         t.pack(side="left", fill="both", expand=True)
@@ -268,8 +271,11 @@ class CalPanel(ttk.Frame):
         self.csv_btn.config(state="normal" if rec and rec.get("controllers") else "disabled")
         if rec:
             n = sum(1 for c in rec["controllers"].values() if not c.get("error"))
+            v = rec.get("vehicle")
+            rpo = f"{len(v['codes'])} RPO codes" if v else "no RPO codes"
             self.head.config(text=f"{rec['vin']}   ·   {n} of {len(rec['controllers_available'])} "
-                                  f"modules saved   ·   list from {rec.get('controllers_listed') or '?'}")
+                                  f"modules saved   ·   {rpo}   ·   list from "
+                                  f"{rec.get('controllers_listed') or '?'}")
         else:
             self.head.config(text="")
         self._update_buttons()
@@ -283,6 +289,10 @@ class CalPanel(ttk.Frame):
             got = (self.rec or {}).get("controllers", {}).get(c)
             if got and got.get("error"):
                 text, color = "failed - " + got["error"][:40], "#9a2a2a"
+            elif got and got.get("not_fitted") and not got.get("modules"):
+                text = "not fitted to this vehicle"
+            elif got and got.get("tis_error") and not got.get("modules"):
+                text, color = "TIS error (see results)", "#8a5a00"
             elif got:
                 text, color = f"saved {got.get('lookup_date', '')}", "#1a7f37"
             else:
@@ -334,12 +344,44 @@ class CalPanel(ttk.Frame):
                 if c.get("error"):
                     t.insert("end", f"Failed: {c['error']}\n", ("err",))
                     continue
+                for q in c.get("questions") or []:
+                    if q["how"] == "not fitted":
+                        continue  # said by the "Not fitted" line
+                    if len(q["taken"]) == 1:
+                        why = next((m["answers"] for m in c["modules"] if m.get("answers")), [])
+                        why = next((a["why"] for a in why if a["question"] == q["question"]), "")
+                        t.insert("end", f"TIS asked “{q['question']}” → {q['taken'][0]}"
+                                        + (f"  ({why})" if why else "") + "\n", ("asked",))
+                    else:
+                        t.insert("end", f"TIS asked “{q['question']}”"
+                                        + (f" ({q['prompt']})" if q.get("prompt") else "")
+                                        + f" - not something the RPO codes tell, so all "
+                                        f"{len(q['taken'])} choices are shown.\n", ("note",))
+                if c.get("not_fitted"):
+                    t.insert("end", f"Not fitted: {c['not_fitted']}\n", ("note",))
+                if c.get("tis_error"):
+                    t.insert("end", f"TIS error on the choice that fits this vehicle: "
+                                    f"{c['tis_error']}\n(TIS gives the same error by hand, "
+                                    f"so it has no calibration to show here.)\n", ("note",))
+                for s in c.get("skipped") or []:
+                    if s != c.get("not_fitted") and not s.endswith(c.get("not_fitted") or "\0"):
+                        t.insert("end", f"Skipped: {s}\n", ("err",))
+                last = None
                 for m in mods:
+                    group = cal.answers_text(m)
+                    if group != last and any(len(q["taken"]) > 1 for q in c.get("questions") or []):
+                        t.insert("end", group + "\n", ("branch",))
+                    last = group
                     if m.get("note"):
                         t.insert("end", m["note"] + "\n", ("note",))
                     for oi, opt in enumerate(m["options"], 1):
                         label = m["module"] + (f"  (option {oi} of {len(m['options'])})"
                                                if len(m["options"]) > 1 else "")
+                        if m.get("vehicle_option") is not None and len(m["options"]) > 1:
+                            if m["vehicle_option"] == oi - 1:
+                                label += f"  ✔ fits ({m.get('vehicle_option_why')})"
+                            elif not hist:
+                                continue  # Current only: hide the option that doesn't fit
                         cur = opt[0]
                         t.insert("end", label, ("module", "row"))
                         t.insert("end", "\t", ("row",))
@@ -362,8 +404,12 @@ class CalPanel(ttk.Frame):
         lines = []
         for cname, c in self.rec["controllers"].items():
             for m in c.get("modules") or []:
-                for opt in m["options"]:
-                    lines.append(f"{cname}\t{m['module']}\t{opt[0]['part_number']}")
+                opts = m["options"]
+                if m.get("vehicle_option") is not None:
+                    opts = [opts[m["vehicle_option"]]]  # only the option that fits the vehicle
+                for opt in opts:
+                    lines.append("\t".join(x for x in (cname, cal.answers_text(m), m["module"],
+                                                       opt[0]["part_number"]) if x))
         self.set_clip("\n".join(lines))
         self.status.set(f"{len(lines)} current part numbers copied (controller, module, part).")
 
@@ -480,7 +526,10 @@ class CalPanel(ttk.Frame):
                 rec["controllers"].pop(c, None)
 
         def progress(event, c, i, n, detail):
-            if event == "listing":
+            if event == "rpo":
+                say("status", f"{vin}: getting the RPO codes from gmpartsgiant.com first "
+                              "(used to answer TIS's equipment questions)...")
+            elif event == "listing":
                 say("status", f"{vin}: asking TIS which modules it has...")
             elif event == "start":
                 say("row", c, "working...", "#0b5cad")
@@ -585,12 +634,49 @@ def _windows_setup():
         pass
 
 
-def set_icon(win: tk.Tk) -> None:
+def _win32_icons(win: tk.Tk, ico: Path) -> bool:
+    """Give the window the .ico's own frames at exactly the sizes Windows draws at this
+    display scaling (taskbar, title bar, Alt+Tab). Tk's iconphoto hands Windows one
+    resampled bitmap, which the taskbar then stretches: the grainy look."""
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    u.LoadImageW.restype = wintypes.HANDLE
+    u.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                             ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    u.GetParent.restype = wintypes.HWND
+    win.update_idletasks()
+    hwnd = u.GetParent(win.winfo_id()) or win.winfo_id()  # Tk's outer frame window
     try:
-        win.iconbitmap(default=str(HERE / "cal_pro.ico"))
+        dpi = u.GetDpiForWindow(hwnd) or 96
+        big = u.GetSystemMetricsForDpi(11, dpi)    # SM_CXICON
+        small = u.GetSystemMetricsForDpi(49, dpi)  # SM_CXSMICON
+    except AttributeError:  # older Windows
+        big, small = u.GetSystemMetrics(11), u.GetSystemMetrics(49)
+    IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
+    ok = False
+    for which, size in ((1, big), (0, small)):  # ICON_BIG, ICON_SMALL
+        h = u.LoadImageW(None, str(ico), IMAGE_ICON, size, size, LR_LOADFROMFILE)
+        if h:
+            u.SendMessageW(hwnd, WM_SETICON, which, h)
+            ok = True
+    return ok
+
+
+def set_icon(win: tk.Tk) -> None:
+    ico = HERE / "cal_pro.ico"
+    try:
+        win.iconbitmap(default=str(ico))
     except tk.TclError:
         pass
-    # Several sharp sizes so Windows never has to stretch a 32 px icon for the taskbar.
+    if sys.platform == "win32":
+        try:
+            if _win32_icons(win, ico):
+                return
+        except Exception:
+            pass
+    # elsewhere: several sharp sizes so nothing is stretched
     imgs = []
     for s in (256, 128, 64, 48, 32, 24, 16):
         try:

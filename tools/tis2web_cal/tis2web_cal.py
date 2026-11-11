@@ -118,13 +118,18 @@ def parse_tree(html: str) -> Node:
 # ------------------------------------------------------------------ page parsing
 
 _ERR_RE = re.compile(r"^E\d{4}: \S")
-_LABEL_RE = re.compile(r"\b(Module|Function|Controller):")
+_STEP_LABEL_RE = re.compile(r"([A-Z][A-Za-z0-9 /&()'-]{1,40}):")
+_SPS_ERRORS = {"sps.exception.no-valid-cop":
+               "TIS has no valid calibration for this vehicle (sps.exception.no-valid-cop)"}
 
 
 def classify_page(html: str) -> dict:
     """What step of the wizard a page is. Returns
-    {kind: landing|controller|function|module|history|unknown, options: [...], selected,
-     history_button: bool, error: "E2769: Invalid VIN!" | None, blocked: marker | None}"""
+    {kind: landing|controller|function|question|module|history|unknown, label, prompt,
+     options: [...], selected, history_button: bool, error: "E2769: Invalid VIN!" | None,
+     blocked: marker | None}
+    A "question" is any extra step TIS asks before the module page, e.g.
+    "Audio System:", "Programming Type:" or "Hardware:"."""
     root = parse_tree(html)
     text = root.text()
     title = next((n.text() for n in root.iter() if n.tag == "title"), "")
@@ -133,19 +138,34 @@ def classify_page(html: str) -> dict:
             for o in (sel.iter() if sel else []) if o.tag == "option"]
     buttons = [n.text() for n in root.iter() if n.tag == "button"]
     # Site errors sit in their own cell, e.g. <td style="color:red">E2769: Invalid VIN!</td>
+    # or "sps.exception.no-valid-cop" (no valid calibration for this vehicle/choice).
     err = next((n.text() for n in root.iter() if n.tag == "td" and not n.has_desc("table")
-                and _ERR_RE.match(n.text())), None)
-    kind = "unknown"
+                and (_ERR_RE.match(n.text()) or n.text().startswith("sps.exception."))), None)
+    if err and err.startswith("sps.exception."):
+        err = _SPS_ERRORS.get(err, err)
+    kind, label, prompt = "unknown", "", ""
     if "Calibration History for:" in text and any("parthistory" in n.classes() for n in root.iter()):
         kind = "history"
     elif sel is not None:
-        lab = _LABEL_RE.search(text.split("Selected Options:")[0])
+        # The step's label is the last "Something:" before the list, after the buttons;
+        # anything between the buttons and the label is the site's instruction text.
+        top = text.split("Selected Options:")[0]
+        first = opts[0][1] if opts else ""
+        head = top[:top.find(first)] if first and first in top else top
+        if "Cancel" in head:
+            head = head[head.rfind("Cancel") + len("Cancel"):]
+        found = list(_STEP_LABEL_RE.finditer(head))
+        if found:
+            label = found[-1].group(1).strip()
+            prompt = head[:found[-1].start()].strip()
         kind = {"Module": "module", "Function": "function", "Controller": "controller"}.get(
-            lab.group(1) if lab else "", "unknown")
+            label, "question" if label else "unknown")
     elif any("Get CAL ID" in b for b in buttons):
         kind = "landing"
     return {
         "kind": kind,
+        "label": label,
+        "prompt": prompt,
         "options": [t for v, t, s in opts if not t.lower().startswith("please select")],
         "selected": next((t for v, t, s in opts if s), None),
         "history_button": any("Complete History" in b for b in buttons),
@@ -239,13 +259,110 @@ def parse_module_page(html: str) -> dict:
                          "options": [rows]}]}
 
 
+# ------------------------------------------------- answering TIS's extra questions
+
+MAX_BRANCHES = 8  # most choices fetched separately when a question can't be answered
+_CODE_RE = re.compile(r"(?<![A-Z0-9])[A-Z0-9]{3}(?![A-Z0-9])")
+_NEG_RE = re.compile(r"\b(?:W/O|WITHOUT|EXCEPT|NOT|NON)\b[\s:-]*((?:RPO\s+)?[A-Z0-9]{3}(?:\s*[/,]\s*[A-Z0-9]{3})*)")
+_FEATURE_RE = re.compile(r"\d\.\dL|\d{1,2}L\d{2}|\d{1,2}T\d{2}")
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s-]", "", (s or "").upper())
+
+
+def option_codes(text: str, vehicle_codes: set) -> tuple[set, set]:
+    """RPO codes an option names, split into (wanted, excluded), e.g.
+    "RPO IO4/IO5/IO6 (Uplevel radio)" -> ({IO4, IO5, IO6}, set()), "w/o UQA" -> (set(), {UQA}).
+    A three-character token counts as a code if it has a digit, the option says "RPO", or
+    the vehicle has that code - so plain words like "VCI" or "AND" are not mistaken for one."""
+    up = (text or "").upper()
+    rpo_ctx = "RPO" in up
+
+    def codes(s):
+        return {t for t in _CODE_RE.findall(s) if t != "RPO" and not t.isdigit() and (
+            any(ch.isdigit() for ch in t) or rpo_ctx or t in vehicle_codes)}
+    excluded = set()
+    for m in _NEG_RE.finditer(up):
+        excluded |= codes(m.group(1))
+    return codes(_NEG_RE.sub(" ", up)), excluded
+
+
+def match_option(text: str, vehicle: dict | None) -> tuple[str, str]:
+    """('match' | 'conflict' | 'neutral', why) for one choice against the vehicle."""
+    if not vehicle:
+        return "neutral", ""
+    have = set(vehicle.get("codes") or [])
+    wanted, excluded = option_codes(text, have)
+    if excluded & have:
+        return "conflict", "vehicle has " + "/".join(sorted(excluded & have))
+    if wanted & have:
+        return "match", "vehicle has " + "/".join(sorted(wanted & have))
+    feats = {_norm(f) for f in _FEATURE_RE.findall(_norm(text))}
+    power = _norm(f"{vehicle.get('engine', '')} {vehicle.get('transmission', '')}")
+    hits = sorted(f for f in feats if f in power)
+    if hits:
+        return "match", "vehicle has " + "/".join(hits)
+    if wanted:
+        return "conflict", "vehicle has none of " + "/".join(sorted(wanted))
+    if excluded:
+        return "match", "vehicle has none of " + "/".join(sorted(excluded))
+    return "neutral", ""
+
+
+def decide(label: str, options: list[str], vehicle: dict | None) -> tuple[list[tuple[str, str]], str]:
+    """Which choice(s) to take at a TIS question. Returns ([(option, why), ...], how) where
+    how is "rpo" (answered from the vehicle's RPO codes), "rule", "only", or "all" (could not
+    tell, so every choice is fetched separately and labelled)."""
+    opts = [o for o in options if o]
+    plain = [o for o in opts if "bulletin" not in o.lower()] or opts  # bulletin-only paths last
+    if label == "Function":
+        return [(o, "") for o in plain], "all" if len(plain) > 1 else "only"
+    if len(plain) == 1:
+        if label != "Function" and match_option(plain[0], vehicle)[0] == "conflict":
+            return [], "not fitted"  # e.g. only "With Forward Collision Alert (RPO UEU)"
+        return [(plain[0], "only choice")], "only"
+    if label.lower() == "programming type" and "Normal" in plain:
+        return [("Normal", "normal programming")], "rule"
+    rated = [(o, *match_option(o, vehicle)) for o in plain]
+    hits = [(o, why) for o, st, why in rated if st == "match"]
+    if hits:
+        return hits, "rpo"
+    left = [(o, why) for o, st, why in rated if st != "conflict"]
+    if len(left) == 1:
+        return [(left[0][0], "the other choices " + "; ".join(w for o, st, w in rated if st == "conflict"))], "rpo"
+    rest = [o for o, _ in left] if left else plain
+    return [(o, "not decidable from RPO codes") for o in rest], "all"
+
+
+def choices_why(option: str, vehicle: dict | None) -> str:
+    return match_option(option, vehicle)[1]
+
+
+def pick_module_options(module: dict, vehicle: dict | None) -> None:
+    """Where TIS lists several valid calibrations for one module (M4455, e.g. "Only for
+    UQA/UQG/UQS speaker packages" vs "For UQ3/UQ5"), mark the one(s) matching the vehicle."""
+    if len(module.get("options") or []) < 2 or not vehicle:
+        return
+    rated = [match_option(opt[0].get("description", ""), vehicle) for opt in module["options"]]
+    hits = [i for i, (st, _) in enumerate(rated) if st == "match"]
+    if not hits:
+        left = [i for i, (st, _) in enumerate(rated) if st != "conflict"]
+        hits = left if len(left) == 1 else []
+    module["vehicle_option"] = hits[0] if len(hits) == 1 else None
+    module["vehicle_option_why"] = rated[hits[0]][1] if len(hits) == 1 else None
+
+
 # ------------------------------------------------------------------ live browser
 
 class Tis2Web:
-    """Steps the site's wizard in an open Playwright page. One VIN at a time."""
+    """Steps the site's wizard in an open Playwright page. One VIN at a time.
 
-    def __init__(self, page, vin: str):
-        self.page, self.vin = page, vin
+    vehicle: {"codes": [RPO codes], "engine": text, "transmission": text}, used to answer
+    TIS's extra questions (e.g. "Audio System: RPO IO3 / RPO IO4/IO5/IO6")."""
+
+    def __init__(self, page, vin: str, vehicle: dict | None = None):
+        self.page, self.vin, self.vehicle = page, vin, vehicle
 
     def _state(self) -> dict:
         info = classify_page(self.page.content())
@@ -292,40 +409,107 @@ class Tis2Web:
             raise NoResultError("the site listed no controllers for this VIN")
         return info["options"]
 
-    def _back_to_controllers(self):
-        for _ in range(3):
-            info = self._state()
-            if info["kind"] == "controller":
-                return
-            self._click("< Back")
-        raise NoResultError("could not get back to the controller list")
-
     def fetch(self, controller: str) -> dict:
-        """From the controller list: history for one controller, then back to the list."""
+        """From the controller list: history for one controller, then back to the list.
+
+        Walks function -> any extra questions -> module page. Each question is answered from
+        the vehicle's RPO codes where possible; otherwise every choice is fetched and the
+        modules are labelled with the answers that led to them."""
         info = self._choose(controller)
         if info["error"]:
             raise SiteError(info["error"])
         if info["kind"] != "function":
             raise NoResultError(f"expected the function step, got {info['kind']}")
-        result = {"functions": info["options"], "modules": []}
-        for i, fn in enumerate(info["options"]):
-            if i:
-                self._state()  # on the function page again after Back
-            minfo = self._choose(fn)
-            if minfo["kind"] != "module":
-                raise NoResultError(f"expected the module step for {fn!r}, got {minfo['kind']}")
-            if minfo["history_button"]:
-                hist = parse_history_html(self._open_history())
-            else:
-                hist = parse_module_page(self.page.content())
+        result = {"functions": info["options"], "modules": [], "questions": [], "skipped": [],
+                  "not_fitted": None}
+        self._walk(info, ["Function"], [], result)
+        for _ in range(8):  # back to the controller list
+            cur = self._state()
+            if cur["kind"] == "controller":
+                break
+            if cur["kind"] == "landing":
+                raise NoResultError("fell back to the start page")
+            self._click("< Back")
+        else:
+            raise NoResultError("could not get back to the controller list")
+        if not result["modules"]:
+            if result["not_fitted"] or result.get("tis_error"):
+                return result  # TIS's own answer for this vehicle, not a failure of ours
+            if result["skipped"]:
+                raise NoResultError(result["skipped"][0])
+        return result
+
+    def _reach(self, labels: list[str], answers: list[dict]) -> dict:
+        """Get back to the page labelled labels[-1] after a branch: press Back until a page on
+        our path shows up (TIS sometimes jumps back two steps, e.g. from its error page), then
+        re-select the answers that lead down to ours."""
+        for _ in range(8):
+            cur = self._state()
+            if cur["label"] in labels:
+                break
+            if cur["kind"] in ("landing", "controller"):
+                raise NoResultError("fell back past this controller's steps")
+            self._click("< Back")
+        else:
+            raise NoResultError(f"could not get back to {labels[-1]!r}")
+        for k in range(labels.index(cur["label"]), len(labels) - 1):
+            cur = self._choose(answers[k]["answer"])
+            if cur["label"] != labels[k + 1]:
+                raise NoResultError(f"TIS did not return to {labels[k + 1]!r}")
+        return cur
+
+    def _walk(self, info: dict, labels: list[str], answers: list, result: dict) -> None:
+        """On a function/question/module page: collect everything below it. Leaves the page
+        wherever it ends up; callers use _reach() to get back to their own step."""
+        if len(labels) > 8:
+            raise NoResultError("TIS asked more questions than expected")
+        if info["kind"] == "module":
+            hist = parse_history_html(self._open_history()) if info["history_button"] \
+                else parse_module_page(self.page.content())
             if hist.get("vin") and hist["vin"].upper() != self.vin:
                 raise NoResultError(f"history page is for {hist['vin']}, not {self.vin}")
+            fn = next((a["answer"] for a in answers if a["question"] == "Function"), "")
             for m in hist["modules"]:
                 m["function"] = fn
+                m["answers"] = [a for a in answers if a["question"] != "Function"]
+                pick_module_options(m, self.vehicle)
             result["modules"].extend(hist["modules"])
-            self._click("< Back")  # -> function page
-        self._back_to_controllers()
-        return result
+            return
+        if info["error"]:
+            raise SiteError(info["error"])
+        if info["kind"] not in ("function", "question"):
+            raise NoResultError(f"unexpected page ({info['kind']}) after "
+                                + (" > ".join(a["answer"] for a in answers) or "the controller"))
+        label = info["label"]
+        choices, how = decide(label, info["options"], self.vehicle)
+        if how == "not fitted":
+            result["not_fitted"] = f"TIS asked {label!r} and its only choice " \
+                                   f"{info['options'][0]!r} needs equipment this vehicle " \
+                                   f"lacks ({choices_why(info['options'][0], self.vehicle)})"
+            choices = []
+        elif how == "all" and len(choices) > MAX_BRANCHES:
+            result["skipped"].append(f"{label}: {len(choices)} choices, more than {MAX_BRANCHES}")
+            choices = []
+        if label != "Function":
+            result["questions"].append({"question": label, "prompt": info["prompt"],
+                                        "options": info["options"], "how": how,
+                                        "taken": [c for c, _ in choices]})
+        for i, (choice, why) in enumerate(choices):
+            if i:
+                self._reach(labels, answers)
+            step = {"question": label, "answer": choice, "why": why, "how": how}
+            try:
+                nxt = self._choose(choice)
+                self._walk(nxt, labels + [nxt["label"] or "?"], answers + [step], result)
+            except (NoResultError, SiteError) as e:
+                # one path failing (e.g. a bulletin-only function) should not lose the others
+                msg = str(e).splitlines()[0]
+                result["skipped"].append(f"{' > '.join(a['answer'] for a in answers + [step])}: {msg}")
+                if how in ("only", "rpo", "rule"):  # the choice that fits this vehicle
+                    if "no valid calibration" in msg:
+                        result["not_fitted"] = msg
+                    elif isinstance(e, SiteError):  # e.g. E4451 internal error, same by hand
+                        result["tis_error"] = result["skipped"].pop()
 
     def _open_history(self) -> str:
         # "Complete History" posts the form into a window named "historycomplete". Give it
@@ -370,6 +554,40 @@ def match_controllers(available: list[str], wanted: list[str] | None) -> list[st
     return out
 
 
+def vehicle_from_rpo(r: dict) -> dict:
+    attrs = r.get("major_attributes") or {}
+    return {"codes": [c["code"] for c in r.get("codes") or []],
+            "engine": attrs.get("Engine"), "transmission": attrs.get("Transmission"),
+            "description": r.get("vehicle"),
+            "source": f"gmpartsgiant.com via RPO PRO, looked up {r.get('lookup_date')}"}
+
+
+def get_vehicle(page, vin: str, rec: dict, say=None, refresh: bool = False) -> dict | None:
+    """The vehicle's RPO codes, needed to answer TIS's equipment questions. Taken from the
+    record, else from RPO PRO's saved result (vin_rpo data folder), else looked up on
+    gmpartsgiant.com with RPO PRO's code and saved there too. None if not available."""
+    say = say or (lambda *a: None)
+    if rec.get("vehicle") and not refresh:
+        return rec["vehicle"]
+    path = Path(vin_rpo.DATA_DIR) / f"{vin}.json"
+    r = None
+    if path.exists() and not refresh:
+        r = json.loads(path.read_text("utf-8"))
+    else:
+        say("rpo", None, 0, 0, "")
+        try:
+            r = vin_rpo.finish(vin_rpo.lookup_live(page, vin), vin, f"{vin_rpo.DECODER_URL}?vin={vin}")
+        except NoResultError as e:
+            rec["vehicle"] = None
+            rec["vehicle_note"] = f"RPO codes not available: {e}"
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")
+    rec["vehicle"] = vehicle_from_rpo(r)
+    rec.pop("vehicle_note", None)
+    return rec["vehicle"]
+
+
 def lookup(page, vin: str, controllers: list[str] | None = None, record: dict | None = None,
            refresh: bool = False, progress=None, should_stop=None) -> dict:
     """List the VIN's controllers (always) and fetch the wanted ones into `record`.
@@ -381,7 +599,11 @@ def lookup(page, vin: str, controllers: list[str] | None = None, record: dict | 
     Stops at a block page (BlockedError)."""
     say = progress or (lambda *a: None)
     rec = record or new_record(vin)
-    tis = Tis2Web(page, vin)
+    vehicle = get_vehicle(page, vin, rec, say, refresh=refresh and not controllers)
+    for c in rec["controllers"].values():  # re-rate saved modules against the RPO codes
+        for m in c.get("modules") or []:
+            pick_module_options(m, vehicle)
+    tis = Tis2Web(page, vin, vehicle)
     say("listing", None, 0, 0, "")
     rec["controllers_available"] = tis.start()
     rec["controllers_listed"] = _today()
@@ -414,7 +636,9 @@ def lookup(page, vin: str, controllers: list[str] | None = None, record: dict | 
                 pass
             continue
         rec["controllers"][c] = {"lookup_date": _today(), **got}
-        say("done", c, i, len(todo), f"{len(got['modules'])} modules")
+        say("done", c, i, len(todo),
+            f"{len(got['modules'])} modules" if got["modules"]
+            else "not fitted to this vehicle" if got.get("not_fitted") else "TIS error")
     return rec
 
 
@@ -443,17 +667,25 @@ def save_record(rec: dict, data_dir: Path = DATA_DIR) -> Path:
     return path
 
 
+def answers_text(m: dict) -> str:
+    """'Audio System = RPO IO4/IO5/IO6 (Uplevel radio)' for the choices that led to a module."""
+    return "; ".join(f"{a['question']} = {a['answer']}" for a in m.get("answers") or [])
+
+
 def csv_rows(rec: dict):
-    yield ["vin", "controller", "function", "module", "option", "position", "current",
-           "part_number", "cvn", "bulletin", "description", "lookup_date"]
+    yield ["vin", "controller", "function", "tis_answers", "module", "option",
+           "matches_vehicle", "position", "current", "part_number", "cvn", "bulletin",
+           "description", "lookup_date"]
     for cname, c in rec["controllers"].items():
         for m in c.get("modules") or []:
             for oi, opt in enumerate(m["options"], 1):
+                fit = "" if m.get("vehicle_option") is None else \
+                    ("yes" if m["vehicle_option"] == oi - 1 else "no")
                 for pi, row in enumerate(opt):
-                    yield [rec["vin"], cname, m.get("function", ""), m["module"], oi, pi,
-                           "yes" if pi == 0 else "", row["part_number"], row.get("cvn") or "",
-                           row.get("bulletin") or "", row.get("description", ""),
-                           c.get("lookup_date", "")]
+                    yield [rec["vin"], cname, m.get("function", ""), answers_text(m), m["module"],
+                           oi, fit, pi, "yes" if pi == 0 else "", row["part_number"],
+                           row.get("cvn") or "", row.get("bulletin") or "",
+                           row.get("description", ""), c.get("lookup_date", "")]
 
 
 def write_csv(rec: dict, path: Path) -> None:
@@ -465,6 +697,9 @@ def print_record(rec: dict, out=None, only: list[str] | None = None) -> None:
     out = out or sys.stdout
     print(f"\n{rec['vin']}  ({len(rec['controllers_available'])} controllers listed by TIS)",
           file=out)
+    v = rec.get("vehicle")
+    print(f"RPO codes: {len(v['codes'])} ({v.get('source')})" if v else
+          f"RPO codes: none ({rec.get('vehicle_note', 'not looked up')})", file=out)
     for cname, c in rec["controllers"].items():
         if only and cname not in only:
             continue
@@ -472,11 +707,30 @@ def print_record(rec: dict, out=None, only: list[str] | None = None) -> None:
         if c.get("error"):
             print(f"   ERROR: {c['error']}", file=out)
             continue
+        for q in c.get("questions") or []:
+            if q["how"] == "not fitted":
+                continue  # said below
+            print(f"   TIS asked {q['question']!r}: " + (
+                f"answered {q['taken'][0]!r}" if len(q["taken"]) == 1
+                else f"could not tell, fetched all {len(q['taken'])} choices") + f" [{q['how']}]",
+                file=out)
+        if c.get("not_fitted"):
+            print(f"   not fitted: {c['not_fitted']}", file=out)
+        if c.get("tis_error"):
+            print(f"   TIS error (TIS's own, for the choice that fits): {c['tis_error']}", file=out)
+        for s in c.get("skipped") or []:
+            print(f"   skipped: {s}", file=out)
+        last = None
         for m in c["modules"]:
+            if answers_text(m) != last and answers_text(m):
+                print(f"   -- {answers_text(m)}", file=out)
+            last = answers_text(m)
             if m.get("note"):
                 print(f"   note: {m['note']}", file=out)
             for oi, opt in enumerate(m["options"], 1):
                 tag = f" (option {oi} of {len(m['options'])})" if len(m["options"]) > 1 else ""
+                if m.get("vehicle_option") == oi - 1:
+                    tag += f"  <- fits this vehicle ({m.get('vehicle_option_why')})"
                 cur = opt[0]
                 print(f"   {m['module']}{tag}", file=out)
                 print(f"      {cur['part_number']}  CVN {cur.get('cvn') or '-':8}  "
@@ -562,7 +816,9 @@ def main(argv=None) -> int:
         return 2
 
     def progress(event, c, i, n, detail):
-        if event == "listing":
+        if event == "rpo":
+            print("  getting RPO codes from gmpartsgiant.com first...", file=sys.stderr)
+        elif event == "listing":
             print("  listing controllers...", file=sys.stderr)
         elif event == "start":
             print(f"  [{i}/{n}] {c} ...", file=sys.stderr, flush=True)

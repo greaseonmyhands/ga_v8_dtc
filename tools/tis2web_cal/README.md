@@ -6,12 +6,27 @@ Edge window (kept minimized). Personal, low-volume use only.
 
 ## How the site works (what the tool clicks through)
 
+0. First the vehicle's RPO codes, engine and transmission are fetched the same way RPO PRO
+   does (gmpartsgiant.com), and saved with RPO PRO's data, so a VIN RPO PRO already looked
+   up costs nothing extra.
 1. Start page: enter the VIN, press **Get CAL ID**. An unknown VIN gives `E2769: Invalid VIN!`.
 2. **Controller** list: the controllers TIS has for that VIN (17 for a 2014 Silverado).
-3. **Function**: so far always just "Programming".
-4. **Module** page: has a **Complete History** button that opens every module of that
+3. **Function**: "Programming" (bulletin-only functions are left out).
+4. Sometimes TIS asks about the vehicle first: "Audio System", "Vehicle Options",
+   "Programming Type", "Hardware" and so on. The tool answers from the RPO codes
+   (e.g. "RPO IO4/IO5/IO6 (Uplevel radio)" because the truck has IO4), "Normal" for
+   Programming Type. If the only choice needs an option the vehicle lacks (say RPO UEU on
+   a truck without it), the controller is marked **not fitted** without clicking on. If
+   the codes cannot tell (e.g. a hardware part number read with GDS), every choice is
+   fetched and the results are grouped by answer.
+5. **Module** page: has a **Complete History** button that opens every module of that
    controller with all its calibration part numbers, CVNs and descriptions, newest first.
-5. Back, Back, next controller.
+6. Back to the controller list, next controller.
+
+TIS sometimes has nothing to show for the choice that fits: "no valid calibration"
+(`sps.exception.no-valid-cop`) is shown as not fitted; an internal error (seen with
+`E4451` on a T3 amplifier with RPO UQ5, and the same when done by hand) is shown as a
+**TIS error** note rather than a failure.
 
 The form and field names are random per session, so the tool finds things by their labels.
 The site ignores a second click within 5 s of the previous one; the tool waits that out,
@@ -19,7 +34,7 @@ which also keeps its pace gentle (about 15-20 s per controller).
 
 Where TIS lists more than one valid calibration for a module it says so (message `M4455`,
 e.g. "Only for UQA/UQG/UQS speaker packages" vs "For UQ3/UQ5"); both options are kept with
-that note. TIS does not pick one for you.
+that note. Where the RPO codes match one of them, it is marked as the one that fits.
 
 ## Setup
 
@@ -43,6 +58,7 @@ Double-click `CAL PRO.exe` (or run `python tools/tis2web_cal/cal_pro_gui.pyw`).
 3. Results: controller headings, module name and current part number in bold, earlier
    parts in grey (**Current only** hides them). Filter by any text; right-click to copy a
    part number or row; **Copy current parts** copies controller / module / part lines.
+   Under each controller it says what TIS asked and what was answered, and why.
 
 **Refresh data** asks TIS again (module list plus the ticked modules) and replaces what is
 saved. **Save as CSV** writes `<VIN>.csv`.
