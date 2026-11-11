@@ -14,9 +14,10 @@ capture starts.
 
 ## What has and has not been tested
 
-| | Simulator | Autel V200 on a vehicle (2026-11-11) |
+| | Simulator | Autel V200 on the bench: BCM, cluster, ECM (2026-11-11) |
 |---|---|---|
-| Window, views, filter, pause, log files | tested | not driven through the window |
+| Window: scrolling and overwrite views, filter, column sorting, pause, log files | tested | **tested** with LS + HS together: 90 IDs, about 19,000 frames logged with none dropped, window stayed responsive |
+| Device list marks the attached device | - | **tested**: V200 shown as detected, listed first and selected |
 | Listing the installed J2534 devices | - | tested |
 | LS capture (receive only) | tested | **tested**: 649 frames in 5 s, 35 IDs, 29-bit and 11-bit |
 | HS capture (receive only) | tested | **tested**: 5135 frames in 4 s, 55 IDs |
@@ -25,9 +26,11 @@ capture starts.
 | HS transmit, script runner, `waitfor` | tested | **tested on the bench** (BCM, cluster, ECM): 4 requests to `7E0`, the ECM answered each on `7E8` |
 | LS transmit | tested | **accepted by the V200** (3 x `101 FE 01 3E`), no error; no reply is expected, so reception by a module is not proven |
 | High-voltage wake-up (`hv`) | - | **accepted by the V200** (1 x `100`); the bus was already awake, so its effect was not observed |
-| Send box in the window | tested | not driven through the window |
+| Send box and Script tab in the window | tested | **tested** on HS: request to `7E0` sent from the Send box, reply on `7E8`; example script ran from the Script tab, all replies received |
 
-The hardware runs used the console `--probe` (same capture and send code as the window).
+The window tests drove the real window from a test script under 32-bit Python (the same
+code the exe is built from) rather than by hand, and the built exe itself was only
+self-tested.
 Still to prove: that an LS frame reaches a module (send a request that gets a reply), and
 that `hv` wakes a sleeping bus.
 
