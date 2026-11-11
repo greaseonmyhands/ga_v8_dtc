@@ -25,13 +25,14 @@ capture starts.
 | Device timestamps | - | **tested**: HS 0C9 averages 12.500 ms, LS 100 ms frames within 0.3 ms |
 | HS transmit, script runner, `waitfor` | tested | **tested on the bench** (BCM, cluster, ECM): 4 requests to `7E0`, the ECM answered each on `7E8` |
 | LS transmit | tested | **tested**: `241 02 1A B0` answered by the BCM on `641` (`03 5A B0 40`), `24C 02 1A B0` answered by the cluster on `64C` (`03 5A B0 60`) |
-| High-voltage wake-up (`hv`) | - | **accepted by the V200** (1 x `100`); the bus was already awake, so its effect was not observed |
+| High-voltage wake-up (`hv`) | - | **tested**: ignition off, LS silent for 5 s, one `100` frame with `hv` sent; the BCM (`13FFE040`) and cluster (`13FFE060`) started sending 83 ms later |
 | Send box and Script tab in the window | tested | **tested** on HS: request to `7E0` sent from the Send box, reply on `7E8`; example script ran from the Script tab, all replies received |
 
 The window tests drove the real window from a test script under 32-bit Python (the same
 code the exe is built from) rather than by hand, and the built exe itself was only
 self-tested.
-Still to prove: that `hv` wakes a sleeping LS bus.
+Not tried on hardware: `repeat forever` scripts, 29-bit transmit, and any device other
+than the V200 on a live bus (the OBDX Pro GT opened but was not on a powered harness).
 
 ## Running it
 
