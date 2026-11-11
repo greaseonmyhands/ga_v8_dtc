@@ -314,11 +314,14 @@ def set_window_state(page, state: str) -> None:
         pass
 
 
-def open_browser(playwright, minimized: bool = False):
-    """Open the installed Google Chrome, or Microsoft Edge if Chrome is not installed."""
+def open_browser(playwright, minimized: bool = False, profile_dir: Path | None = None):
+    """Open the installed Google Chrome, or Microsoft Edge if Chrome is not installed.
+
+    profile_dir: the persistent profile folder to use (default: this tool's PROFILE_DIR).
+    Other tools pass their own so two apps never fight over one locked profile."""
     errors = []
     for channel in ("chrome", "msedge"):
-        profile = PROFILE_DIR / channel
+        profile = Path(profile_dir or PROFILE_DIR) / channel
         profile.mkdir(parents=True, exist_ok=True)
         try:
             ctx = playwright.chromium.launch_persistent_context(

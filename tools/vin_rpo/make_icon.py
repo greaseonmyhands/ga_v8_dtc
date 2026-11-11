@@ -24,13 +24,13 @@ def font(size):
     return ImageFont.load_default()
 
 
-def draw() -> Image.Image:
+def draw(word: str = "RPO") -> Image.Image:
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((24, 24, S - 24, S - 24), radius=190, fill=NAVY)
 
     big, small = font(400), font(215)
-    b = d.textbbox((0, 0), "RPO", font=big)
+    b = d.textbbox((0, 0), word, font=big)
     w, h_big = b[2] - b[0], b[3] - b[1]
     p = d.textbbox((0, 0), "PRO", font=small)
     h_small = p[3] - p[1]
@@ -38,7 +38,7 @@ def draw() -> Image.Image:
     top = (S - (h_big + gap + rule + gap + h_small)) / 2      # centre the whole stack
     left = (S - w) / 2
 
-    d.text((left - b[0], top - b[1]), "RPO", font=big, fill=WHITE)
+    d.text((left - b[0], top - b[1]), word, font=big, fill=WHITE)
     y = top + h_big + gap
     d.rectangle((left, y, left + w, y + rule), fill=AMBER)
     y += rule + gap
