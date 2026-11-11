@@ -22,12 +22,14 @@ capture starts.
 | HS capture (receive only) | tested | **tested**: 5135 frames in 4 s, 55 IDs |
 | LS + HS together | tested | **tested**: both channels open at once, 90 IDs |
 | Device timestamps | - | **tested**: HS 0C9 averages 12.500 ms, LS 100 ms frames within 0.3 ms |
-| Send box, script runner, both example scripts | tested | **not tested** |
-| High-voltage wake-up (`hv`) | - | **not tested** |
+| HS transmit, script runner, `waitfor` | tested | **tested on the bench** (BCM, cluster, ECM): 4 requests to `7E0`, the ECM answered each on `7E8` |
+| LS transmit | tested | **accepted by the V200** (3 x `101 FE 01 3E`), no error; no reply is expected, so reception by a module is not proven |
+| High-voltage wake-up (`hv`) | - | **accepted by the V200** (1 x `100`); the bus was already awake, so its effect was not observed |
+| Send box in the window | tested | not driven through the window |
 
-The hardware captures were made with the console `--probe` (same capture code as the
-window). Nothing has been transmitted through real hardware yet; treat sending as unproven
-until it has been tried on a bench module.
+The hardware runs used the console `--probe` (same capture and send code as the window).
+Still to prove: that an LS frame reaches a module (send a request that gets a reply), and
+that `hv` wakes a sleeping bus.
 
 ## Running it
 
@@ -178,7 +180,12 @@ Standard J2534 04.04 calls on the vendor DLL named in the registry:
     py -3.12-32 tools\j2534_can\can_pro.pyw --probe sim --bus BOTH --seconds 2
 
 `--probe` opens the named device receive-only, counts frames per ID for a few seconds,
-saves the log files and prints a summary. It never sends.
+saves the log files and prints a summary. It sends only if you add `--script`:
+
+    py -3.12-32 tools\j2534_can\can_pro.pyw --probe V200 --bus HS --seconds 1 --show 7E0-7EF --script tools\j2534_can\examples\hs_request_reply.canscript
+
+That listens for `--seconds`, prints the script preview, **transmits** the script, and
+prints each sent frame plus received frames matching the `--show` filter.
 
 ## Tests
 

@@ -672,6 +672,9 @@ class ScriptRunner:
     def running(self) -> bool:
         return self._thread.is_alive()
 
+    def _n(self) -> str:
+        return f"{self.sent} frame{'' if self.sent == 1 else 's'}"
+
     def _finish(self, kind, text):
         self.result = (kind, text)
         self.on_event(kind, text)
@@ -680,12 +683,12 @@ class ScriptRunner:
         try:
             self._steps(self.script.steps)
         except _Stopped:
-            return self._finish("stopped", f"Script stopped after {self.sent} frames sent.")
+            return self._finish("stopped", f"Script stopped after {self._n()} sent.")
         except ScriptError as e:
-            return self._finish("error", f"Script stopped at {e} ({self.sent} frames sent).")
+            return self._finish("error", f"Script stopped at {e} ({self._n()} sent).")
         except BusError as e:
-            return self._finish("error", f"Script stopped: {e} ({self.sent} frames sent).")
-        self._finish("done", f"Script finished: {self.sent} frames sent.")
+            return self._finish("error", f"Script stopped: {e} ({self._n()} sent).")
+        self._finish("done", f"Script finished: {self._n()} sent.")
 
     def _steps(self, steps):
         for s in steps:

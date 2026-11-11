@@ -655,7 +655,12 @@ def probe(argv) -> int:
     ap.add_argument("--probe", metavar="NAME", required=True, help="part of the device name, or 'sim'")
     ap.add_argument("--bus", default="LS", choices=["LS", "HS", "BOTH"])
     ap.add_argument("--seconds", type=float, default=5.0)
+    ap.add_argument("--show", metavar="FILTER", help="print frames matching this ID filter")
+    ap.add_argument("--script", type=Path, metavar="FILE",
+                    help="TRANSMITS: run this script after --seconds of listening")
     a = ap.parse_args(argv)
+    show = canlog.IdFilter(a.show) if a.show else None
+    script = canlog.parse_script(a.script.read_text("utf-8-sig")) if a.script else None
     buses = ("LS", "HS") if a.bus == "BOTH" else (a.bus,)
     if a.probe.lower() == "sim":
         backend = canlog.SimBackend()
@@ -670,6 +675,8 @@ def probe(argv) -> int:
     def on_frames(frames):
         for f in frames:
             seen[(f.bus, f.id_text)] = seen.get((f.bus, f.id_text), 0) + 1
+            if f.tx or (show and show.match(f)):
+                print(f"  {f.ts:9.4f} {f.bus} {'Tx' if f.tx else 'Rx'} {f.id_text:>8}  {f.data_text}")
     s = canlog.Session(backend, buses, on_frames=on_frames,
                        log_factory=lambda: canlog.LogWriter(canlog.DATA_DIR))
     s.start()
@@ -680,11 +687,23 @@ def probe(argv) -> int:
         return 1
     print("open:", "; ".join(s.notes))
     time.sleep(a.seconds)
+    if script:
+        print(script.summary(), *script.preview(), sep="\n    ")
+        s.tx_enabled = True
+        runner = canlog.ScriptRunner(s, script)
+        try:
+            runner.start()
+            runner.join()
+            print(runner.result[1])
+        except canlog.BusError as e:
+            print("script not run:", e)
+        time.sleep(0.5)
     s.stop(wait=5)
     print(f"{s.rx_count} frames received, {s.tx_count} sent, {len(seen)} IDs"
           + (f", error: {s.error}" if s.error else ""))
-    for (bus, idt), n in sorted(seen.items()):
-        print(f"  {bus} {idt:>8}  x{n}")
+    if not (show or script):
+        for (bus, idt), n in sorted(seen.items()):
+            print(f"  {bus} {idt:>8}  x{n}")
     if s.log:
         print("saved", s.log.csv_path, "and", s.log.log_path.name)
     return 0
