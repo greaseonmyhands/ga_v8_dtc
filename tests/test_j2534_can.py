@@ -354,5 +354,39 @@ class J2534Binding(unittest.TestCase):
             j2534.J2534Backend(info).open(("HS",))
 
 
+class Detect(unittest.TestCase):
+    """The presence check's result handling, with stand-in helper commands (no driver)."""
+
+    def test_classify(self):
+        base = j2534.DETECT_BASE
+        self.assertEqual(j2534.classify_detect(base + 0), "detected")
+        self.assertEqual(j2534.classify_detect(base + j2534.ERR_DEVICE_IN_USE), "in use")
+        self.assertEqual(j2534.classify_detect(base + j2534.ERR_DEVICE_NOT_CONNECTED), "not detected")
+        self.assertEqual(j2534.classify_detect(base + j2534.ERR_FAILED), "not detected")
+        self.assertEqual(j2534.classify_detect(base + j2534.DETECT_NO_DRIVER), "not detected")
+        self.assertEqual(j2534.classify_detect(base + j2534.ERR_TIMEOUT), "no answer")
+        self.assertEqual(j2534.classify_detect(None), "no answer")
+        self.assertEqual(j2534.classify_detect(1), "not detected")     # helper crashed
+
+    def test_run_detect(self):
+        def cmd(code):
+            return [sys.executable, "-c", code]
+        self.assertEqual(j2534.run_detect(cmd("import sys; sys.exit(100)")), "detected")
+        self.assertEqual(j2534.run_detect(cmd("import sys; sys.exit(108)")), "not detected")
+        self.assertEqual(j2534.run_detect(cmd("import sys; sys.exit(114)")), "in use")
+        t0 = time.monotonic()
+        self.assertEqual(j2534.run_detect(cmd("import time; time.sleep(30)"), timeout=0.5), "no answer")
+        self.assertLess(time.monotonic() - t0, 10)                     # stalled helper is stopped
+        self.assertEqual(j2534.run_detect([r"C:\no\such\helper.exe"]), "not detected")
+
+    def test_mdi_driver_is_skipped(self):
+        self.assertTrue(j2534.detect_skipped("C:/GM MDI Software/Dynamic Link Libraries/BVTX4J32.dll"))
+        self.assertFalse(j2534.detect_skipped("C:/Windows/SysWOW64/VCIV200432.dll"))
+
+    def test_child_reports_missing_driver(self):
+        self.assertEqual(j2534.detect_child(r"C:\no\such\driver.dll"),
+                         j2534.DETECT_BASE + j2534.DETECT_NO_DRIVER)
+
+
 if __name__ == "__main__":
     unittest.main()

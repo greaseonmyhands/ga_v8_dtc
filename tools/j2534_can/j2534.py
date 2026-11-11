@@ -374,3 +374,74 @@ class J2534Backend:
             except Exception:
                 pass
             self.device_id = None
+
+
+# ---------------------------------------------------------------- presence check
+# J2534 has no "is the device plugged in?" call, so the check is PassThruOpen followed by
+# PassThruClose. Each driver is checked in its own short-lived helper process because some
+# drivers stall for a long time (or could crash) when nothing is attached. The helper
+# reports through its exit code: DETECT_BASE + the PassThruOpen result.
+DETECT_BASE = 100
+DETECT_NO_DRIVER = 0xFE
+DETECT_WATCHDOG_S = 8.0
+DETECT_STATES = ("detected", "in use", "not detected", "no answer", "not checked")
+# Drivers left out of the check: the Bosch MDI / MDI 2 driver pops up its own window and
+# takes over 20 s to give up when nothing is attached.
+DETECT_SKIP_DLLS = frozenset({"bvtx4j32.dll"})
+
+
+def detect_skipped(dll: str) -> bool:
+    return os.path.basename(dll).lower() in DETECT_SKIP_DLLS
+
+
+def detect_child(dll: str) -> int:
+    """Runs in the helper process. Opens and closes the device; connects no channel and
+    sends nothing. Returns the process exit code."""
+    import threading
+    dog = threading.Timer(DETECT_WATCHDOG_S, lambda: os._exit(DETECT_BASE + ERR_TIMEOUT))
+    dog.daemon = True
+    dog.start()                      # never outlive the app if the driver hangs
+    try:
+        lib = _load(dll)
+        lib.PassThruOpen.restype = ctypes.c_long
+        dev = c_ulong(0)
+        rc = lib.PassThruOpen(None, byref(dev))
+        if rc == 0:
+            lib.PassThruClose(dev)
+    except (BusError, AttributeError, OSError):
+        return DETECT_BASE + DETECT_NO_DRIVER
+    return DETECT_BASE + (rc if 0 <= rc < DETECT_NO_DRIVER else ERR_FAILED)
+
+
+def classify_detect(exit_code) -> str:
+    """Helper exit code (None = it had to be stopped) -> one of DETECT_STATES."""
+    if exit_code is None:
+        return "no answer"
+    rc = exit_code - DETECT_BASE
+    if rc == 0:
+        return "detected"
+    if rc == ERR_DEVICE_IN_USE:
+        return "in use"
+    if rc == ERR_TIMEOUT:
+        return "no answer"
+    return "not detected"
+
+
+def run_detect(cmd, timeout: float = 5.0) -> str:
+    """Run one helper command line and classify the result."""
+    import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=flags)
+    except OSError:
+        return "not detected"
+    try:
+        return classify_detect(p.wait(timeout))
+    except subprocess.TimeoutExpired:
+        try:   # the one-file exe is a parent and a child process: stop the whole tree
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True,
+                           creationflags=flags, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            p.kill()
+        return "no answer"
