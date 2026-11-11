@@ -28,6 +28,11 @@ class App(tk.Tk):
         self.title("GM VIN → RPO lookup")
         self.geometry("980x640")
         self.minsize(720, 420)
+        try:  # window/taskbar icon; bundled next to the code (or unpacked by the exe)
+            self.iconbitmap(str(Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+                                / "vin_rpo.ico"))
+        except tk.TclError:
+            pass
         self.q: queue.Queue = queue.Queue()
         self.busy = False
         self.current = None
@@ -42,14 +47,11 @@ class App(tk.Tk):
         self.vin_var.trace_add("write", self.on_vin_edit)
         self.btn = ttk.Button(top, text="Look up", command=self.start)
         self.btn.pack(side="left")
-        self.refresh_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="Refresh (ignore saved)", variable=self.refresh_var).pack(
-            side="left", padx=(10, 0))
-        self.csv_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="Also save CSV", variable=self.csv_var).pack(side="left", padx=(10, 0))
-        self.min_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(top, text="Keep browser minimized", variable=self.min_var).pack(
-            side="left", padx=(10, 0))
+        # Refresh: look the VIN up again even though a saved result exists.
+        self.refresh_btn = ttk.Button(top, text="Refresh data", command=lambda: self.start(refresh=True))
+        self.refresh_btn.pack(side="left", padx=(8, 0))
+        self.csv_btn = ttk.Button(top, text="Save as CSV", command=self.save_csv, state="disabled")
+        self.csv_btn.pack(side="left", padx=(8, 0))
 
         self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10), anchor="w",
                                  fg="#666666", padx=62)
@@ -82,11 +84,14 @@ class App(tk.Tk):
         ttk.Label(frow, text="Filter:").pack(side="left")
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *a: self.fill())
-        ttk.Entry(frow, textvariable=self.filter_var, width=28).pack(side="left", padx=6)
+        self.filter_entry = ttk.Entry(frow, textvariable=self.filter_var, width=28)
+        self.filter_entry.pack(side="left", padx=6)
         ttk.Button(frow, text="Copy codes", command=self.copy_codes).pack(side="left")
         self.cluster_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frow, text="Cluster RPOs only", style="Toolbutton",
-                        variable=self.cluster_var, command=self.fill).pack(side="left", padx=10)
+        # Same look as the other buttons; the label says what a click will do.
+        self.cluster_btn = ttk.Button(frow, text="Cluster RPOs only", width=18,
+                                      command=self.toggle_cluster)
+        self.cluster_btn.pack(side="left", padx=8)
         self.count = ttk.Label(frow, text="")
         self.count.pack(side="left")
         tf = ttk.Frame(right)
@@ -109,9 +114,76 @@ class App(tk.Tk):
         self.status = tk.StringVar(value="Ready.")
         ttk.Label(self, textvariable=self.status, padding=(10, 6), anchor="w").pack(fill="x")
 
+        self.table.bind("<Button-1>", lambda e: self.table.focus_set(), add="+")
+        self.table.bind("<Control-a>", lambda e: (self.table.tag_add("sel", "1.0", "end-1c"), "break")[1])
+        for w in (self.entry, self.filter_entry):
+            w.bind("<Button-3>", self.entry_menu)
+        self.table.bind("<Button-3>", self.table_menu)
+        self.saved.bind("<Button-3>", self.saved_menu)
+
         self.reload_saved()
         self.entry.focus_set()
         self.after(100, self.pump)
+
+    # -------------------------------------------------------------- right-click
+    def popup(self, event, items):
+        m = tk.Menu(self, tearoff=0)
+        for item in items:
+            if item is None:
+                m.add_separator()
+            else:
+                label, cmd, enabled = item
+                m.add_command(label=label, command=cmd, state="normal" if enabled else "disabled")
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+        return "break"
+
+    def clip_has_text(self) -> bool:
+        try:
+            return bool(self.clipboard_get())
+        except tk.TclError:
+            return False
+
+    def entry_menu(self, event):
+        w = event.widget
+        w.focus_set()
+        sel = w.selection_present()
+        return self.popup(event, [
+            ("Cut", lambda: w.event_generate("<<Cut>>"), sel),
+            ("Copy", lambda: w.event_generate("<<Copy>>"), sel),
+            ("Paste", lambda: w.event_generate("<<Paste>>"), self.clip_has_text()),
+            None,
+            ("Select all", lambda: w.selection_range(0, "end"), bool(w.get())),
+        ])
+
+    def table_menu(self, event):
+        t = self.table
+        t.focus_set()
+        sel = bool(t.tag_ranges("sel"))
+        line = t.get(f"@{event.x},{event.y} linestart", f"@{event.x},{event.y} lineend")
+        code = line.split("\t")[0] if "\t" in line else ""
+        return self.popup(event, [
+            ("Copy", lambda: self.set_clip(t.get("sel.first", "sel.last")), sel),
+            (f"Copy code {code}" if code else "Copy code", lambda: self.set_clip(code), bool(code)),
+            ("Copy this row", lambda: self.set_clip(line.replace("\t", "  ")), bool(code)),
+            None,
+            ("Copy all shown codes", self.copy_codes, bool(self.current)),
+            ("Select all", lambda: t.tag_add("sel", "1.0", "end-1c"), bool(self.current)),
+        ])
+
+    def saved_menu(self, event):
+        i = self.saved.nearest(event.y)
+        if i < 0 or not self.saved.size():
+            return "break"
+        vin = self.saved.get(i)
+        return self.popup(event, [(f"Copy {vin}", lambda: self.set_clip(vin), True)])
+
+    def set_clip(self, text: str):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.status.set("Copied to the clipboard.")
 
     # ------------------------------------------------------------------ display
     def reload_saved(self):
@@ -127,6 +199,7 @@ class App(tk.Tk):
 
     def show(self, r: dict):
         self.current = r
+        self.csv_btn.config(state="normal")
         attrs = dict(r.get("major_attributes") or {})
         engine = attrs.pop("Engine", None) or "not listed"
         trans = attrs.pop("Transmission", None) or "not listed"
@@ -135,6 +208,12 @@ class App(tk.Tk):
         rest = [f"{k}: {v}" for k, v in attrs.items()]
         rest.append(f"{len(r['codes'])} RPO codes, looked up {r.get('lookup_date')}")
         self.sub.config(text="   ·   ".join(rest))
+        self.fill()
+
+    def toggle_cluster(self):
+        on = not self.cluster_var.get()
+        self.cluster_var.set(on)
+        self.cluster_btn.config(text="Show all RPOs" if on else "Cluster RPOs only")
         self.fill()
 
     def visible_codes(self):
@@ -210,11 +289,29 @@ class App(tk.Tk):
         os.startfile(self.data_dir)  # Windows only
 
     # ------------------------------------------------------------------- lookup
-    def start(self):
+    def save_csv(self):
+        if not self.current:
+            return
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        path = self.data_dir / f"{self.current['vin']}.csv"
+        try:
+            vin_rpo.write_csv(self.current, path)
+        except OSError as e:  # e.g. the CSV is open in Excel
+            messagebox.showerror("Save as CSV", f"Could not write {path}\n\n{e}", parent=self)
+            return
+        self.status.set(f"Saved {path}")
+
+    def start(self, refresh=False):
         if self.busy:
             return
         raw = self.vin_var.get().replace(",", " ").split()
+        if not raw and refresh and self.current:
+            raw = [self.current["vin"]]  # Refresh with an empty box redoes the VIN on screen
         if not raw:
+            return
+        if refresh and not messagebox.askokcancel(
+                "Refresh data", "Look up " + ", ".join(v.upper() for v in raw) + " again on the "
+                "site and replace the saved result?", parent=self):
             return
         try:
             vins = list(dict.fromkeys(vin_rpo.validate_vin(v) for v in raw))
@@ -223,11 +320,11 @@ class App(tk.Tk):
             return
         self.busy = True
         self.btn.config(state="disabled")
-        threading.Thread(target=self.work, daemon=True,
-                         args=(vins, self.refresh_var.get(), self.csv_var.get(),
-                               self.min_var.get())).start()
+        self.refresh_btn.config(state="disabled")
+        threading.Thread(target=self.work, daemon=True, args=(vins, refresh, False)).start()
 
-    def work(self, vins, refresh, want_csv, minimized=False):
+    def work(self, vins, refresh, want_csv, minimized=True):
+        # The browser always runs minimized here; it is restored if the site needs you.
         """Runs off the UI thread. Talks to the UI only through self.q."""
         say = lambda *m: self.q.put(m)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -302,6 +399,7 @@ class App(tk.Tk):
                 elif kind == "done":
                     self.busy = False
                     self.btn.config(state="normal")
+                    self.refresh_btn.config(state="normal")
                     if a[0]:
                         self.status.set(a[0].splitlines()[0])
                         messagebox.showerror("VIN lookup", a[0], parent=self)
