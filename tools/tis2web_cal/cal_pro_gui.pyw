@@ -34,6 +34,7 @@ class CalPanel(ttk.Frame):
         self.rec: dict | None = None        # record on screen
         self.checks: dict[str, tk.BooleanVar] = {}
         self.row_state: dict[str, ttk.Label] = {}
+        ttk.Style(self).configure("List.TCheckbutton", background="white", font=("Segoe UI", 9))
 
         # ---------------------------------------------------------------- top row
         top = ttk.Frame(self, padding=10)
@@ -81,7 +82,9 @@ class CalPanel(ttk.Frame):
         ttk.Button(brow, text="Not saved", width=10, command=self.tick_unsaved).pack(side="left")
         lf = ttk.Frame(mid, borderwidth=1, relief="solid")
         lf.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(lf, width=330, height=120, highlightthickness=0, background="white")
+        k = self.winfo_fpixels("1i") / 96.0  # pixel sizes follow the display scaling
+        self.canvas = tk.Canvas(lf, width=int(330 * k), height=int(120 * k), highlightthickness=0,
+                                background="white")
         lsb = ttk.Scrollbar(lf, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=lsb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -127,9 +130,11 @@ class CalPanel(ttk.Frame):
         t = self.table
         t.tag_configure("ctrl", font=("Segoe UI", 12, "bold"), foreground=NAVY, spacing1=10)
         t.tag_configure("ctrlsub", font=("Segoe UI", 8), foreground="#8a8a8a")
-        t.tag_configure("module", font=("Segoe UI", 10, "bold"), lmargin1=8, lmargin2=8)
+        # A wrapped description continues under the description column, not at the left edge.
+        t.tag_configure("row", lmargin1=8, lmargin2="360p")
+        t.tag_configure("module", font=("Segoe UI", 10, "bold"))
         t.tag_configure("part", font=("Consolas", 12, "bold"), foreground="#111111")
-        t.tag_configure("old", font=("Segoe UI", 9), foreground="#7a7a7a", lmargin1=8, lmargin2=8)
+        t.tag_configure("old", font=("Segoe UI", 9), foreground="#7a7a7a")
         t.tag_configure("oldpart", font=("Consolas", 10), foreground="#7a7a7a")
         t.tag_configure("note", font=("Segoe UI", 9, "italic"), foreground="#8a5a00",
                         lmargin1=8, lmargin2=8)
@@ -151,13 +156,13 @@ class CalPanel(ttk.Frame):
         t.bind("<Button-3>", self.table_menu)
         self.saved.bind("<Button-3>", self.saved_menu)
 
-        self.after_idle(self._align_hint)
+        self.entry.bind("<Configure>", lambda e: self._align_hint(), add="+")
         self.reload_saved()
         self.entry.focus_set()
         self.after(100, self.pump)
 
     def _align_hint(self):
-        self.update_idletasks()
+        # line the n / 17 hint up under the VIN box (runs whenever the box moves or resizes)
         self.vin_hint.config(padx=max(0, self.entry.winfo_rootx() - self.winfo_rootx()))
 
     def _wheel(self, e):
@@ -253,8 +258,9 @@ class CalPanel(ttk.Frame):
                 row.pack(fill="x", anchor="w")
                 v = tk.BooleanVar(value=c in old)
                 v.trace_add("write", lambda *a: self._update_buttons())
-                tk.Checkbutton(row, text=c, variable=v, background="white", anchor="w",
-                               activebackground="white", font=("Segoe UI", 9)).pack(side="left")
+                # ttk checkboxes are drawn by Windows, so they scale with the display.
+                ttk.Checkbutton(row, text=c, variable=v, style="List.TCheckbutton").pack(
+                    side="left", padx=(4, 0), pady=1)
                 st = tk.Label(row, text="", background="white", font=("Segoe UI", 8), fg="#7a7a7a")
                 st.pack(side="left", padx=(4, 8))
                 self.checks[c], self.row_state[c] = v, st
@@ -335,16 +341,17 @@ class CalPanel(ttk.Frame):
                         label = m["module"] + (f"  (option {oi} of {len(m['options'])})"
                                                if len(m["options"]) > 1 else "")
                         cur = opt[0]
-                        t.insert("end", label, ("module",))
-                        t.insert("end", "\t")
-                        t.insert("end", cur["part_number"], ("part",))
-                        t.insert("end", f"\tCVN {cur.get('cvn') or '-'}\t{cur.get('description', '')}\n")
+                        t.insert("end", label, ("module", "row"))
+                        t.insert("end", "\t", ("row",))
+                        t.insert("end", cur["part_number"], ("part", "row"))
+                        t.insert("end", f"\tCVN {cur.get('cvn') or '-'}\t{cur.get('description', '')}\n",
+                                 ("row",))
                         if hist:
                             for r in opt[1:]:
-                                t.insert("end", "   earlier\t", ("old",))
-                                t.insert("end", r["part_number"], ("oldpart",))
+                                t.insert("end", "   earlier\t", ("old", "row"))
+                                t.insert("end", r["part_number"], ("oldpart", "row"))
                                 t.insert("end", f"\tCVN {r.get('cvn') or '-'}\t{r.get('description', '')}\n",
-                                         ("old",))
+                                         ("old", "row"))
         elif rec and rec.get("controllers_available"):
             t.insert("end", "Tick the modules you want on the left and press Get history.", ("note",))
         t.configure(state="disabled")
@@ -558,16 +565,54 @@ class CalPanel(ttk.Frame):
         self.after(100, self.pump)
 
 
-class App(tk.Tk):
-    def __init__(self, data_dir: Path = cal.DATA_DIR):
-        super().__init__()
-        self.title("CAL PRO")
-        self.geometry("1280x720")
-        self.minsize(980, 480)
+def _windows_setup():
+    """Tell Windows this app draws itself at the real display scaling. Without it Windows
+    stretches the whole window (and its small icon) up, which looks blurry and grainy at
+    150-200 % scaling. Also give the taskbar its own group/icon instead of Python's."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system DPI aware
+    except Exception:
         try:
-            self.iconbitmap(str(HERE / "cal_pro.ico"))
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("greaseonmyhands.CALPRO")
+    except Exception:
+        pass
+
+
+def set_icon(win: tk.Tk) -> None:
+    try:
+        win.iconbitmap(default=str(HERE / "cal_pro.ico"))
+    except tk.TclError:
+        pass
+    # Several sharp sizes so Windows never has to stretch a 32 px icon for the taskbar.
+    imgs = []
+    for s in (256, 128, 64, 48, 32, 24, 16):
+        try:
+            imgs.append(tk.PhotoImage(master=win, file=str(HERE / "icons" / f"cal_pro_{s}.png")))
         except tk.TclError:
             pass
+    if imgs:
+        win.iconphoto(True, *imgs)
+        win._icon_imgs = imgs  # keep references alive
+
+
+class App(tk.Tk):
+    def __init__(self, data_dir: Path = cal.DATA_DIR):
+        _windows_setup()
+        super().__init__()
+        self.title("CAL PRO")
+        k = self.winfo_fpixels("1i") / 96.0  # 2.0 at 200 % display scaling
+        w = min(int(1280 * k), self.winfo_screenwidth() - 40)
+        h = min(int(720 * k), self.winfo_screenheight() - 80)
+        self.geometry(f"{w}x{h}")
+        self.minsize(int(980 * k), int(480 * k))
+        set_icon(self)
         self.panel = CalPanel(self, data_dir)
         self.panel.pack(fill="both", expand=True)
 
