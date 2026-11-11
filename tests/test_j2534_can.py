@@ -205,6 +205,44 @@ class SimSession(unittest.TestCase):
         ts = [f.ts for f in got if f.bus == "HS"]
         self.assertEqual(ts, sorted(ts))
 
+    def test_logging_is_off_until_started_and_can_be_restarted(self):
+        got = []
+        with tempfile.TemporaryDirectory() as d:
+            s = self.open(on_frames=got.extend)
+            self.assertTrue(wait_until(lambda: len(got) > 20))
+            self.assertIsNone(s.log)
+            self.assertEqual(list(Path(d).iterdir()), [])          # nothing saved by default
+            self.assertIsNone(s.stop_log())
+
+            first = s.start_log(Path(d))
+            self.assertIs(s.start_log(Path(d)), first)             # already logging: same files
+            n0 = len(got)
+            self.assertTrue(wait_until(lambda: len(got) > n0 + 20))
+            closed = s.stop_log()
+            self.assertIs(closed, first)
+            self.assertTrue(closed.closed)
+            lines = first.log_path.read_text("ascii").splitlines()
+            self.assertEqual(len(lines), first.count)
+            self.assertGreater(first.count, 10)
+            self.assertLess(first.count, len(got))                 # earlier frames are not in it
+            # times in the file continue from the capture clock, not from zero
+            with open(first.csv_path, newline="", encoding="utf-8") as fh:
+                rows = list(csv.reader(fh))
+            self.assertGreater(float(rows[1][0]), 0.05)
+
+            n1 = len(got)
+            self.assertTrue(wait_until(lambda: len(got) > n1 + 20))
+            self.assertEqual(len(first.log_path.read_text("ascii").splitlines()), first.count)
+
+            second = s.start_log(Path(d))                          # a new pair, never overwritten
+            self.assertNotEqual(second.csv_path, first.csv_path)
+            self.assertTrue(wait_until(lambda: second.count > 5))
+            s.stop(3)                                              # stopping the capture closes it
+            self.assertTrue(second.closed)
+            self.assertIs(s.log, second)
+            self.assertEqual(len(second.log_path.read_text("ascii").splitlines()), second.count)
+            self.assertEqual(len(list(Path(d).iterdir())), 4)
+
     def test_single_bus_only_gets_that_bus(self):
         got = []
         self.open(buses=("LS",), on_frames=got.extend)

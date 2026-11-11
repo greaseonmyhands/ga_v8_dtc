@@ -77,22 +77,24 @@ The J2534 driver DLLs on this PC are all 32-bit, so the program must be 32-bit t
 2. **Bus**: LS, HS, or LS + HS together. Not every device can open both at once: the
    Autel V200 can; the OBDX Pro GT refuses the second bus, so log one bus at a time with it.
 3. **Start**. Frames scroll live: time, bus, direction, ID, 11/29-bit, DLC, data.
-   The status line says what connected and which files are being written.
-4. **Stop** ends the capture and closes the log files.
+   The status line says what connected and whether frames are being saved.
+4. **Start logging** when you want frames saved to disk (see Log files). Nothing is
+   saved until you press it.
+5. **Stop** ends the capture and closes any open log files.
 
 ### Views
 
 - **Scrolling view** (default): one row per frame, newest at the bottom. It follows the
   newest frame while you are scrolled to the bottom; scroll up to hold your place. It keeps
   the last 2000 rows and draws at most 300 new rows per screen update, so a busy bus cannot
-  lock the window up. Rows it did not draw are counted on screen and are still in the log.
+  lock the window up. Rows it did not draw are counted on screen; if logging is on they are still in the log.
 - **Overwrite view**: one row per ID, updated in place, with a count and the period in ms.
   Use this on a busy bus.
 - **Sorting**: click a column heading to sort by it (▲ ascending), again for descending
   (▼), a third time to go back to the normal order. It works in both views and stays
   sorted while frames arrive. IDs sort as hex numbers, Time / DLC / Count / Period as
   numbers. While the scrolling view is sorted it does not jump to the newest frame.
-- **Pause** freezes the display only. The log files keep recording.
+- **Pause** freezes the display only. If logging is on, the log files keep recording.
 - **Clear** empties the display, not the log files.
 
 ### Filter
@@ -106,12 +108,26 @@ Type in the Filter box; it applies as you type. Space or comma separated:
 | `!0C9` | hide an ID (or `!100-1FF` a range) |
 | `LS` or `HS` | only that bus |
 
-The filter changes what is shown, never what is logged. Right-click a row for
+The filter changes what is shown, never what is logged: the log gets every frame. Right-click a row for
 "Show only this ID", "Hide this ID", copy, and "Put in the Send frame box".
 
 ### Log files
 
-Every capture is written, as it runs, to two files named `can_YYYYMMDD_HHMMSS`:
+Logging is **off** until you press **Start logging**; the button then reads **Stop
+logging**. The counter beside it shows `logging (N saved)` or `not logging`.
+
+- Pressed during a capture, it saves frames from that moment on. Frames already on
+  screen are not written.
+- Pressed before a capture, it stays on and the capture is saved from its first frame.
+- **Stop logging** closes the files and says how many frames they hold. The capture
+  carries on. Start logging again makes a new pair of files; nothing is overwritten.
+- Stopping the capture also closes the files. The button stays as you left it for the
+  next capture.
+- Times in the files are seconds since the capture started, so a log started part-way
+  through lines up with what was on screen.
+
+While logging, every frame is written as it arrives to two files named
+`can_YYYYMMDD_HHMMSS` (the time logging started):
 
 - **`.csv`**: `time_s, utc_time, bus, dir, id, id_bits, dlc, data`. Opens in Excel or
   anything else. Sent frames have `dir` = `Tx`.
