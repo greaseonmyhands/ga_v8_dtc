@@ -44,8 +44,8 @@ codes the gauge-cluster XML files reference (list in `CLUSTER_RPOS` in `vin_rpo.
 has `--cluster`). The site lists engine and transmission only as text, not as RPO codes
 (no `LV3` / `MYC` rows), so check those yourself.
 
-**Keep browser minimized** (CLI: `--minimized`) minimizes the real browser window during a
-lookup and brings it back if the site needs you. It is not headless mode.
+The window app always keeps the real browser window minimized during a lookup and brings it
+back if the site needs you (CLI: `--minimized`). It is not headless mode.
 
 ## Standalone exe
 

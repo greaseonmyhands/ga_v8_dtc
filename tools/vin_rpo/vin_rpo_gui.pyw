@@ -28,6 +28,11 @@ class App(tk.Tk):
         self.title("GM VIN → RPO lookup")
         self.geometry("980x640")
         self.minsize(720, 420)
+        try:  # window/taskbar icon; bundled next to the code (or unpacked by the exe)
+            self.iconbitmap(str(Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+                                / "vin_rpo.ico"))
+        except tk.TclError:
+            pass
         self.q: queue.Queue = queue.Queue()
         self.busy = False
         self.current = None
@@ -47,9 +52,6 @@ class App(tk.Tk):
             side="left", padx=(10, 0))
         self.csv_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="Also save CSV", variable=self.csv_var).pack(side="left", padx=(10, 0))
-        self.min_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(top, text="Keep browser minimized", variable=self.min_var).pack(
-            side="left", padx=(10, 0))
 
         self.vin_hint = tk.Label(self, text="0 / 17", font=("Segoe UI", 10), anchor="w",
                                  fg="#666666", padx=62)
@@ -295,10 +297,10 @@ class App(tk.Tk):
         self.busy = True
         self.btn.config(state="disabled")
         threading.Thread(target=self.work, daemon=True,
-                         args=(vins, self.refresh_var.get(), self.csv_var.get(),
-                               self.min_var.get())).start()
+                         args=(vins, self.refresh_var.get(), self.csv_var.get())).start()
 
-    def work(self, vins, refresh, want_csv, minimized=False):
+    def work(self, vins, refresh, want_csv, minimized=True):
+        # The browser always runs minimized here; it is restored if the site needs you.
         """Runs off the UI thread. Talks to the UI only through self.q."""
         say = lambda *m: self.q.put(m)
         self.data_dir.mkdir(parents=True, exist_ok=True)
