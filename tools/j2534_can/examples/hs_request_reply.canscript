@@ -1,0 +1,17 @@
+# High-speed CAN example: send a request and wait for the reply.
+#
+# OBD mode 01 PID 00 ("supported PIDs") to the engine controller at 7E0; the reply comes
+# back on 7E8 starting "?? 41 00". The simulator answers this one, so it can be tried
+# with no hardware.
+
+send HS 7E0 02 01 00 00 00 00 00 00
+waitfor HS 7E8 ?? 41 00 timeout 1000
+
+wait 250
+
+# Three more, 100 ms apart. "continue" means carry on even if no reply arrives.
+repeat 3
+    send HS 7E0 02 01 0C 00 00 00 00 00      # PID 0C, engine speed
+    waitfor HS 7E8 ?? 41 0C timeout 500 continue
+    wait 100
+end

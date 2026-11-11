@@ -1,0 +1,16 @@
+# GMLAN low-speed (single-wire) bench example: wake the bus, then keep it awake.
+#
+# 1. One high-voltage wake-up frame (ID 100, no data, sent with the J2534 SW_CAN_HV_TX flag).
+# 2. Functional TesterPresent (ID 101, data FE 01 3E) every 2 seconds, 10 times.
+#
+# Check these against your own captures before using them on a vehicle.
+
+bus LS
+
+send 100 hv          # high-voltage wake-up
+wait 100
+
+repeat 10
+    send 101 FE 01 3E    # all nodes, 1 byte, TesterPresent
+    wait 2000
+end
