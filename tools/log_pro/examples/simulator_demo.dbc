@@ -1,0 +1,25 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: SIM
+
+CM_ "Demo DBC for LOG PRO's built-in simulator. It decodes the made-up frames the simulator sends, so the PID side can be tried with no hardware.";
+
+BO_ 201 Sim_Engine_HS: 6 SIM
+ SG_ SimCounterLo : 7|8@0+ (1,0) [0|255] "count"  SIM
+ SG_ SimCounter16 : 0|16@1+ (1,0) [0|65535] "count"  SIM
+ SG_ SimTemp : 39|8@0+ (0.5,-10) [-10|117.5] "degC"  SIM
+ SG_ SimGear : 43|4@0+ (1,0) [0|15] ""  SIM
+
+BO_ 489 Sim_Speed_HS: 6 SIM
+ SG_ SimSpeedRaw : 7|16@0+ (0.01,0) [0|655.35] "km/h"  SIM
+
+BO_ 2149851136 Sim_Body_LS: 8 SIM
+ SG_ SimBodyCounter : 7|8@0+ (1,0) [0|255] "count"  SIM
+ SG_ SimSigned : 55|8@0- (1,0) [-128|127] ""  SIM
+ SG_ SimVolts : 63|8@0+ (0.1,0) [0|25.5] "V"  SIM
+
+VAL_ 201 SimGear 10 "Ten" 0 "Zero" ;
