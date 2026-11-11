@@ -34,6 +34,7 @@ MAX_ROWS = 2000        # rows kept on screen in the scrolling view
 MAX_PER_TICK = 300     # rows added per screen update; the rest are in the log file only
 RECENT = 5000          # frames remembered for re-filtering
 TICK_MS = 50
+RESORT_S = 0.4         # while sorted by a column, re-sort live rows this often
 COLS = ("time", "bus", "dir", "id", "bits", "dlc", "data", "count", "period")
 HEAD = {"time": "Time (s)", "bus": "Bus", "dir": "Dir", "id": "ID", "bits": "Bits",
         "dlc": "DLC", "data": "Data", "count": "Count", "period": "Period (ms)"}
@@ -67,6 +68,10 @@ class App(tk.Tk):
         self.sorted_keys: list = []    # keys currently shown in the overwrite view
         self.rows: deque = deque()     # item ids in the scrolling view
         self.skipped = 0
+        self.sort_col = None           # column the table is sorted by; None = arrival / ID order
+        self.sort_rev = False
+        self.sort_due = False          # rows changed since the last sort
+        self.sort_at = 0.0
 
         # ---------------------------------------------------------------- top
         top = ttk.Frame(self, padding=(10, 10, 10, 4))
@@ -178,7 +183,7 @@ class App(tk.Tk):
         self.tree = ttk.Treeview(tf, columns=COLS, show="headings", height=6, style="Can.Treeview",
                                  selectmode="extended")
         for c in COLS:
-            self.tree.heading(c, text=HEAD[c], anchor="w")
+            self.tree.heading(c, text=HEAD[c], anchor="w", command=lambda c=c: self.sort_by(c))
             self.tree.column(c, width=int(WIDTH[c] * k), anchor="w", stretch=False)
         self.tree.tag_configure("tx", foreground="#0b5cad")
         tsb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
@@ -521,6 +526,58 @@ class App(tk.Tk):
     def key(f):
         return (f.bus, f.ext, f.arb_id, f.tx)
 
+    # --------------------------------------------------------------------- sort
+    def sort_by(self, col):
+        """Heading click: ascending, then descending, then back to the normal order."""
+        if self.sort_col != col:
+            self.sort_col, self.sort_rev = col, False
+        elif not self.sort_rev:
+            self.sort_rev = True
+        else:
+            self.sort_col, self.sort_rev = None, False
+        for c in COLS:
+            mark = "" if c != self.sort_col else ("  ▼" if self.sort_rev else "  ▲")
+            self.tree.heading(c, text=HEAD[c] + mark)
+        if self.sort_col is None:
+            self.rebuild()
+            self.status.set("Sort off: " + ("ordered by bus and ID." if self.overwrite
+                                            else "newest frames at the bottom."))
+        else:
+            self.apply_sort()
+            self.status.set(f"Sorted by {HEAD[col]}, {'descending' if self.sort_rev else 'ascending'}. "
+                            "Click the heading again to change.")
+
+    @staticmethod
+    def sort_value(col, text):
+        """Sort key for one cell. Numbers sort as numbers, IDs as hex; blanks go first."""
+        text = str(text)
+        try:
+            if col in ("time", "period"):
+                return (1, float(text))
+            if col == "id":
+                return (1, int(text, 16))
+            if col in ("bits", "dlc", "count"):
+                return (1, int(text))
+        except ValueError:
+            return (0, 0)
+        return (1, text)
+
+    def apply_sort(self):
+        self.sort_due = False
+        self.sort_at = time.monotonic()
+        col = self.sort_col
+        if col is None:
+            return
+        i = COLS.index(col)
+        tree = self.tree
+        now = list(tree.get_children())
+        # Python's sort is stable, so rows with equal cells keep their current order.
+        want = sorted(now, key=lambda iid: self.sort_value(col, tree.item(iid, "values")[i]),
+                      reverse=self.sort_rev)
+        if want != now:
+            for pos, iid in enumerate(want):
+                tree.move(iid, "", pos)
+
     def rebuild(self):
         """Redraw the table from memory (after a filter/view change, Clear or Resume)."""
         self.tree.delete(*self.tree.get_children())
@@ -534,8 +591,9 @@ class App(tk.Tk):
             for f in shown:
                 self.rows.append(self.tree.insert("", "end", values=self.values(f),
                                                   tags=("tx",) if f.tx else ()))
-            if self.rows:
+            if self.rows and self.sort_col is None:
                 self.tree.see(self.rows[-1])
+        self.apply_sort()
         self.update_count()
 
     def put_overwrite(self, k):
@@ -549,7 +607,8 @@ class App(tk.Tk):
         else:
             pos = bisect.bisect(self.sorted_keys, k)
             self.sorted_keys.insert(pos, k)
-            self.tree.insert("", pos, iid=iid, values=vals, tags=("tx",) if f.tx else ())
+            self.tree.insert("", pos if self.sort_col is None else "end", iid=iid, values=vals,
+                             tags=("tx",) if f.tx else ())
 
     def add_frames(self, frames):
         dirty = {}
@@ -569,6 +628,7 @@ class App(tk.Tk):
         if self.overwrite:
             for k in dirty:
                 self.put_overwrite(k)
+            self.sort_due = True
             return
         shown = [f for f in frames if self.filter.match(f)]
         if len(shown) > MAX_PER_TICK:
@@ -576,7 +636,8 @@ class App(tk.Tk):
             shown = shown[-MAX_PER_TICK:]
         if not shown:
             return
-        follow = self.tree.yview()[1] >= 0.999
+        follow = self.sort_col is None and self.tree.yview()[1] >= 0.999
+        self.sort_due = True
         for f in shown:
             self.rows.append(self.tree.insert("", "end", values=self.values(f),
                                               tags=("tx",) if f.tx else ()))
@@ -637,6 +698,8 @@ class App(tk.Tk):
             pass
         if frames:
             self.add_frames(frames)
+        if self.sort_due and self.sort_col and time.monotonic() - self.sort_at >= RESORT_S:
+            self.apply_sort()
         if self.session:
             self.update_count()
         self.after(TICK_MS, self.pump)

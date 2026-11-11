@@ -362,6 +362,8 @@ class Session:
                 for bus in self.buses:
                     got.extend(self.backend.read(bus))
                 self.rx_count += len(got)
+                if len(self.buses) > 1:
+                    got.sort(key=lambda f: f.ts)   # merge the buses by time within a batch
                 while True:
                     try:
                         req = self._txq.get_nowait()

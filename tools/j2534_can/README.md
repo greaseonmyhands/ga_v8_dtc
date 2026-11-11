@@ -70,6 +70,10 @@ The J2534 driver DLLs on this PC are all 32-bit, so the program must be 32-bit t
   lock the window up. Rows it did not draw are counted on screen and are still in the log.
 - **Overwrite view**: one row per ID, updated in place, with a count and the period in ms.
   Use this on a busy bus.
+- **Sorting**: click a column heading to sort by it (▲ ascending), again for descending
+  (▼), a third time to go back to the normal order. It works in both views and stays
+  sorted while frames arrive. IDs sort as hex numbers, Time / DLC / Count / Period as
+  numbers. While the scrolling view is sorted it does not jump to the newest frame.
 - **Pause** freezes the display only. The log files keep recording.
 - **Clear** empties the display, not the log files.
 
