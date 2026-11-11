@@ -57,7 +57,22 @@ The J2534 driver DLLs on this PC are all 32-bit, so the program must be 32-bit t
 1. **Device**: pick the interface. The list comes from
    `HKLM\SOFTWARE\WOW6432Node\PassThruSupport.04.04`. `Simulator (no hardware)` makes up
    traffic so you can try everything with nothing plugged in.
-2. **Bus**: LS, HS, or LS + HS together.
+   When the window opens (and when you click **Rescan**) it checks in the background which
+   devices are attached, and marks each entry:
+
+   | Mark | Meaning |
+   |---|---|
+   | `● name (detected)` | the driver opened the device; listed first and selected for you |
+   | `● name (in use)` | attached, but another program has it open |
+   | `name (not detected)` | the driver says nothing is attached |
+   | `name (no answer)` | the driver did not reply within 5 seconds |
+   | `name (not checked)` | Bosch MDI and MDI 2: their driver opens its own window when checked, so they are skipped. They can still be selected and used |
+
+   The check only opens and closes each driver; it connects to no bus and sends nothing.
+   It does not run during a capture. It reports what the driver says, so a driver that
+   claims a device is there when it is not will show as detected.
+2. **Bus**: LS, HS, or LS + HS together. Not every device can open both at once: the
+   Autel V200 can; the OBDX Pro GT refuses the second bus, so log one bus at a time with it.
 3. **Start**. Frames scroll live: time, bus, direction, ID, 11/29-bit, DLC, data.
    The status line says what connected and which files are being written.
 4. **Stop** ends the capture and closes the log files.

@@ -17,6 +17,7 @@ import sys
 import time
 import tkinter as tk
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
@@ -34,6 +35,7 @@ MAX_ROWS = 2000        # rows kept on screen in the scrolling view
 MAX_PER_TICK = 300     # rows added per screen update; the rest are in the log file only
 RECENT = 5000          # frames remembered for re-filtering
 TICK_MS = 50
+DETECT_TIMEOUT_S = 5.0  # a driver that has not answered by then shows "no answer"
 RESORT_S = 0.4         # while sorted by a column, re-sort live rows this often
 COLS = ("time", "bus", "dir", "id", "bits", "dlc", "data", "count", "period")
 HEAD = {"time": "Time (s)", "bus": "Bus", "dir": "Dir", "id": "ID", "bits": "Bits",
@@ -44,7 +46,7 @@ HERE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 
 class App(tk.Tk):
-    def __init__(self, data_dir: Path = canlog.DATA_DIR):
+    def __init__(self, data_dir: Path = canlog.DATA_DIR, detect: bool = True):
         super().__init__()
         self.data_dir = Path(data_dir)
         self.title("CAN PRO")
@@ -80,7 +82,13 @@ class App(tk.Tk):
         tk.Label(top, text="PRO", font=("Segoe UI Black", 10), fg="#e0900a", padx=0).pack(
             side="left", padx=(3, 16), pady=(4, 0))
         ttk.Label(top, text="Device:").pack(side="left")
-        self.dev_var = tk.StringVar()
+        self.dev_var = tk.StringVar()      # text shown in the list (name + attached state)
+        self.dev_label = ""                # the chosen device's real name
+        self.dev_picked = False            # True once the user chose a device by hand
+        self.dev_names: dict = {}          # list text -> device name
+        self.detect: dict = {}             # device name -> checking / detected / ...
+        self.detect_gen = 0
+        self.auto_detect = detect
         # Right-hand controls are packed first so a narrow window never hides Start.
         self.start_btn = ttk.Button(top, text="Start", width=8, command=self.toggle_capture)
         self.start_btn.pack(side="right", padx=(6, 0))
@@ -93,6 +101,7 @@ class App(tk.Tk):
         self.rescan_btn.pack(side="right")
         self.dev_box = ttk.Combobox(top, textvariable=self.dev_var, state="readonly", width=20)
         self.dev_box.pack(side="left", padx=(6, 4), fill="x", expand=True)
+        self.dev_box.bind("<<ComboboxSelected>>", self.on_device_pick)
 
         row = ttk.Frame(self, padding=(10, 2, 10, 0))
         row.pack(fill="x")
@@ -292,15 +301,64 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ devices
     def load_devices(self):
+        """List the installed devices, then check in the background which are attached."""
         self.devices = j2534.list_devices()
-        names = [d.label for d in self.devices] + [SIM_LABEL]
-        self.dev_box.config(values=names)
-        if self.dev_var.get() not in names:
-            pick = next((n for n in names if "V200" in n), names[0])
-            self.dev_var.set(pick)
+        labels = [d.label for d in self.devices]
+        if self.dev_label not in labels + [SIM_LABEL]:
+            self.dev_label = next((n for n in labels if "V200" in n), (labels + [SIM_LABEL])[0])
+            self.dev_picked = False
+        can_check = self.auto_detect and struct.calcsize("P") == 4 and not self.session
+        self.detect = ({d.label: "not checked" if j2534.detect_skipped(d.dll) else "checking"
+                        for d in self.devices} if can_check else {})
+        self.detect_gen += 1
+        self.show_devices()
         n = len(self.devices)
         note = "" if struct.calcsize("P") == 4 else "  (64-bit Python: only the simulator will open)"
-        self.status.set(f"{n} J2534 device{'s' if n != 1 else ''} installed.{note}")
+        self.status.set(f"{n} J2534 device{'s' if n != 1 else ''} installed."
+                        + (" Checking which are attached..." if can_check and n else note))
+        if can_check:
+            gen, q = self.detect_gen, self.q
+            pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="can-detect")
+            for d in self.devices:
+                if self.detect[d.label] != "checking":
+                    continue
+                pool.submit(lambda d=d: q.put(("detect", gen, (
+                    d.label, j2534.run_detect(detect_command(d.dll), DETECT_TIMEOUT_S)))))
+            pool.shutdown(wait=False)
+
+    def device_text(self, label: str) -> str:
+        state = self.detect.get(label)
+        if state in ("detected", "in use"):
+            return f"● {label}   ({state})"
+        return f"{label}   ({state}{'...' if state == 'checking' else ''})" if state else label
+
+    def show_devices(self):
+        """Fill the Device list: attached devices first, each with its state."""
+        rank = {"detected": 0, "in use": 1}
+        labels = sorted((d.label for d in self.devices),
+                        key=lambda n: (rank.get(self.detect.get(n), 2), n.lower()))
+        self.dev_names = {self.device_text(n): n for n in labels}
+        self.dev_names[SIM_LABEL] = SIM_LABEL
+        self.dev_box.config(values=list(self.dev_names))
+        self.dev_var.set(next(t for t, n in self.dev_names.items() if n == self.dev_label))
+
+    def on_device_pick(self, _evt=None):
+        self.dev_label = self.dev_names.get(self.dev_var.get(), self.dev_label)
+        self.dev_picked = True
+        self.dev_box.selection_clear()
+
+    def on_detect(self, label: str, state: str):
+        self.detect[label] = state
+        found = [n for n, st in self.detect.items() if st == "detected"]
+        if (state == "detected" and not self.dev_picked and not self.session
+                and self.detect.get(self.dev_label) != "detected"):
+            self.dev_label = label        # nothing chosen by hand yet: pick the attached one
+        self.show_devices()
+        if "checking" not in self.detect.values():
+            short = ", ".join(d.name for d in self.devices if d.label in found)
+            if not self.session:
+                self.status.set(f"{len(self.devices)} J2534 devices installed. "
+                                + (f"Detected: {short}." if found else "None detected."))
 
     # ------------------------------------------------------------------ capture
     def toggle_capture(self):
@@ -310,7 +368,7 @@ class App(tk.Tk):
             self.stop_script()
             self.session.stop()
             return
-        name = self.dev_var.get()
+        name = self.dev_names.get(self.dev_var.get(), self.dev_var.get())
         buses = BUS_CHOICES[self.bus_var.get()]
         if name == SIM_LABEL:
             backend = canlog.SimBackend()
@@ -667,6 +725,10 @@ class App(tk.Tk):
         try:
             while True:
                 kind, src, arg = self.q.get_nowait()
+                if kind == "detect":
+                    if src == self.detect_gen:
+                        self.on_detect(*arg)
+                    continue
                 if kind == "script":
                     if src is not self.runner:
                         continue
@@ -708,6 +770,13 @@ class App(tk.Tk):
         if self.session:
             self.session.stop(wait=2.0)
         self.destroy()
+
+
+def detect_command(dll: str) -> list:
+    """Command line of the helper process that checks one driver (see j2534.detect_child)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--detect", dll]
+    return [sys.executable, str(Path(__file__).resolve()), "--detect", dll]
 
 
 # ------------------------------------------------------------------ command line
@@ -791,7 +860,9 @@ def selftest() -> None:
 
 
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+    if "--detect" in sys.argv:
+        os._exit(j2534.detect_child(sys.argv[sys.argv.index("--detect") + 1]))
+    elif "--selftest" in sys.argv:
         selftest()
     elif "--probe" in sys.argv:
         sys.exit(probe(sys.argv[1:]))
