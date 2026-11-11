@@ -24,15 +24,14 @@ capture starts.
 | LS + HS together | tested | **tested**: both channels open at once, 90 IDs |
 | Device timestamps | - | **tested**: HS 0C9 averages 12.500 ms, LS 100 ms frames within 0.3 ms |
 | HS transmit, script runner, `waitfor` | tested | **tested on the bench** (BCM, cluster, ECM): 4 requests to `7E0`, the ECM answered each on `7E8` |
-| LS transmit | tested | **accepted by the V200** (3 x `101 FE 01 3E`), no error; no reply is expected, so reception by a module is not proven |
+| LS transmit | tested | **tested**: `241 02 1A B0` answered by the BCM on `641` (`03 5A B0 40`), `24C 02 1A B0` answered by the cluster on `64C` (`03 5A B0 60`) |
 | High-voltage wake-up (`hv`) | - | **accepted by the V200** (1 x `100`); the bus was already awake, so its effect was not observed |
 | Send box and Script tab in the window | tested | **tested** on HS: request to `7E0` sent from the Send box, reply on `7E8`; example script ran from the Script tab, all replies received |
 
 The window tests drove the real window from a test script under 32-bit Python (the same
 code the exe is built from) rather than by hand, and the built exe itself was only
 self-tested.
-Still to prove: that an LS frame reaches a module (send a request that gets a reply), and
-that `hv` wakes a sleeping bus.
+Still to prove: that `hv` wakes a sleeping LS bus.
 
 ## Running it
 
@@ -169,10 +168,12 @@ Example:
         wait 100
     end
 
-Two examples are in `examples\`:
+Three examples are in `examples\`:
 
 - `ls_wake_keepalive.canscript`: LS high-voltage wake-up, then functional TesterPresent
   every 2 s, 10 times.
+- `ls_read_module_address.canscript`: LS read-only request to the BCM (`241`) and the
+  cluster (`24C`), waiting for each reply. Checked on the bench.
 - `hs_request_reply.canscript`: HS request to 7E0 and wait for the reply on 7E8. The
   simulator answers this one.
 

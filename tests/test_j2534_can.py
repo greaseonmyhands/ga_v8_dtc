@@ -169,7 +169,7 @@ class ScriptParsing(unittest.TestCase):
 
     def test_examples_parse(self):
         files = sorted(EXAMPLES.glob("*.canscript"))
-        self.assertEqual(len(files), 2)
+        self.assertEqual(len(files), 3)
         for p in files:
             s = canlog.parse_script(p.read_text("utf-8"))
             self.assertTrue(s.sends, p.name)

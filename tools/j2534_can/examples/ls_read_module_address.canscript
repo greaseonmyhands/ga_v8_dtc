@@ -1,0 +1,12 @@
+# LS request/reply check: GMLAN ReadDataByIdentifier ($1A), identifier $B0
+# (the module's own diagnostic address). Read-only. A positive reply starts "?? 5A B0";
+# a refusal starts "?? 7F 1A". Either one proves the frame reached the module.
+bus LS
+
+send 241 02 1A B0                     # BCM, physical request
+waitfor 641 timeout 1000 continue
+wait 300
+
+send 24C 02 1A B0                     # cluster (IPC), physical request
+waitfor 64C timeout 1000 continue
+wait 300
