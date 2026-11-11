@@ -25,7 +25,7 @@ class App(tk.Tk):
     def __init__(self, data_dir: Path = vin_rpo.DATA_DIR):
         super().__init__()
         self.data_dir = Path(data_dir)
-        self.title("GM VIN → RPO lookup")
+        self.title("RPO PRO")
         self.geometry("980x640")
         self.minsize(720, 420)
         try:  # window/taskbar icon; bundled next to the code (or unpacked by the exe)
@@ -39,6 +39,11 @@ class App(tk.Tk):
 
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")
+        mark = ("Segoe UI Black", 15)  # round O; Tk falls back if the font is missing
+        tk.Label(top, text="RPO", font=mark, fg="#12233a", padx=0).pack(side="left")
+        # Smaller PRO, like the icon.
+        tk.Label(top, text="PRO", font=("Segoe UI Black", 10), fg="#e0900a", padx=0).pack(
+            side="left", padx=(3, 16), pady=(4, 0))
         ttk.Label(top, text="VIN(s):").pack(side="left")
         self.vin_var = tk.StringVar()
         self.entry = ttk.Entry(top, textvariable=self.vin_var, font=("Consolas", 12))
@@ -60,12 +65,12 @@ class App(tk.Tk):
         body = ttk.Panedwindow(self, orient="horizontal")
         body.pack(fill="both", expand=True, padx=10)
 
-        left = ttk.Frame(body)
+        left = ttk.Frame(body, padding=(0, 0, 8, 0))
         ttk.Label(left, text="Saved VINs").pack(anchor="w")
-        self.saved = tk.Listbox(left, font=("Consolas", 10), width=20, exportselection=False)
+        self.saved = tk.Listbox(left, font=("Consolas", 10), width=20, height=6, exportselection=False)
         self.saved.pack(fill="both", expand=True)
         self.saved.bind("<<ListboxSelect>>", self.on_saved)
-        ttk.Button(left, text="Open data folder", command=self.open_folder).pack(fill="x", pady=(6, 0))
+        ttk.Button(left, text="Open data folder", command=self.open_folder).pack(fill="x", pady=8)
         body.add(left, weight=0)
 
         right = ttk.Frame(body)
@@ -95,8 +100,8 @@ class App(tk.Tk):
         self.count = ttk.Label(frow, text="")
         self.count.pack(side="left")
         tf = ttk.Frame(right)
-        tf.pack(fill="both", expand=True, padx=(10, 0))
-        self.table = tk.Text(tf, wrap="word", cursor="arrow", borderwidth=1, relief="solid",
+        tf.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 8))
+        self.table = tk.Text(tf, height=6, width=40, wrap="word", cursor="arrow", borderwidth=1, relief="solid",
                              padx=8, pady=6, spacing1=2, spacing3=2, tabs=("64p",),
                              font=("Segoe UI", 10))
         self.table.tag_configure("row", lmargin2="64p")
@@ -112,6 +117,7 @@ class App(tk.Tk):
         body.add(right, weight=1)
 
         self.status = tk.StringVar(value="Ready.")
+        ttk.Separator(self, orient="horizontal").pack(fill="x")
         ttk.Label(self, textvariable=self.status, padding=(10, 6), anchor="w").pack(fill="x")
 
         self.table.bind("<Button-1>", lambda e: self.table.focus_set(), add="+")
@@ -121,6 +127,8 @@ class App(tk.Tk):
         self.table.bind("<Button-3>", self.table_menu)
         self.saved.bind("<Button-3>", self.saved_menu)
 
+        self.update_idletasks()  # line the length hint up under the VIN box
+        self.vin_hint.config(padx=max(0, self.entry.winfo_rootx() - self.winfo_rootx()))
         self.reload_saved()
         self.entry.focus_set()
         self.after(100, self.pump)
