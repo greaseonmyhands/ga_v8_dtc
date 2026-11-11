@@ -7,6 +7,9 @@ can_logs/
 data/log_pro/
 log_pro_logs/
 tools/vin_rpo/.profile/
+# tis2web_cal (CAL PRO): real VIN output, browser profile
+data/tis2web_cal/
+tools/tis2web_cal/.profile/
 dist/
 build/
 *.spec
