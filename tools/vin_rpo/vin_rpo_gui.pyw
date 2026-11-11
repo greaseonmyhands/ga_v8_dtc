@@ -41,7 +41,9 @@ class App(tk.Tk):
         top.pack(fill="x")
         mark = ("Segoe UI Black", 15)  # round O; Tk falls back if the font is missing
         tk.Label(top, text="RPO", font=mark, fg="#12233a", padx=0).pack(side="left")
-        tk.Label(top, text="PRO", font=mark, fg="#e0900a", padx=0).pack(side="left", padx=(2, 16))
+        # Smaller, letter-spaced PRO, like the icon.
+        tk.Label(top, text="P R O", font=("Segoe UI Black", 9), fg="#e0900a", padx=0).pack(
+            side="left", padx=(4, 16), pady=(5, 0))
         ttk.Label(top, text="VIN(s):").pack(side="left")
         self.vin_var = tk.StringVar()
         self.entry = ttk.Entry(top, textvariable=self.vin_var, font=("Consolas", 12))

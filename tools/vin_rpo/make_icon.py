@@ -1,4 +1,5 @@
-"""Draws vin_rpo.ico: "RPO" over "PRO" (the same three letters, re-ordered) on a navy tile.
+"""Draws vin_rpo.ico for RPO PRO: big "RPO", an amber rule, and a smaller letter-spaced "PRO"
+spanning the same width, on a navy tile.
 
 Needs Pillow (pip install pillow). Uses Segoe UI Black, which ships with Windows.
 
@@ -27,15 +28,26 @@ def draw() -> Image.Image:
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((24, 24, S - 24, S - 24), radius=190, fill=NAVY)
-    f = font(350)
-    rows = (("RPO", WHITE), ("PRO", AMBER))
-    boxes = [d.textbbox((0, 0), t, font=f) for t, _ in rows]
-    cap = max(b[3] - b[1] for b in boxes)
-    gap = 80
-    y = (S - (2 * cap + gap)) / 2
-    for (text, colour), b in zip(rows, boxes):
-        d.text(((S - (b[2] - b[0])) / 2 - b[0], y - b[1]), text, font=f, fill=colour)
-        y += cap + gap
+
+    big, small = font(400), font(180)
+    b = d.textbbox((0, 0), "RPO", font=big)
+    w, h_big = b[2] - b[0], b[3] - b[1]
+    letters = [d.textbbox((0, 0), c, font=small) for c in "PRO"]
+    h_small = max(l[3] for l in letters) - min(l[1] for l in letters)
+    gap, rule = 58, 22
+    top = (S - (h_big + gap + rule + gap + h_small)) / 2      # centre the whole stack
+    left = (S - w) / 2
+
+    d.text((left - b[0], top - b[1]), "RPO", font=big, fill=WHITE)
+    y = top + h_big + gap
+    d.rectangle((left, y, left + w, y + rule), fill=AMBER)
+    y += rule + gap - min(l[1] for l in letters)
+    ink = sum(l[2] - l[0] for l in letters)
+    step = (w - ink) / 2                                        # spread P R O across the width
+    x = left
+    for c, l in zip("PRO", letters):
+        d.text((x - l[0], y), c, font=small, fill=AMBER)
+        x += (l[2] - l[0]) + step
     return img
 
 
