@@ -88,11 +88,10 @@ class App(tk.Tk):
         self.filter_entry.pack(side="left", padx=6)
         ttk.Button(frow, text="Copy codes", command=self.copy_codes).pack(side="left")
         self.cluster_var = tk.BooleanVar(value=False)
-        # A push-button style toggle: raised when off, pressed-in and tinted when on.
-        tk.Checkbutton(frow, text="Cluster RPOs only", variable=self.cluster_var,
-                       command=self.fill, indicatoron=False, relief="raised", borderwidth=2,
-                       padx=10, pady=2, selectcolor="#cfe3f7", cursor="hand2",
-                       font=("Segoe UI", 9)).pack(side="left", padx=10)
+        # Same look as the other buttons; the label says what a click will do.
+        self.cluster_btn = ttk.Button(frow, text="Cluster RPOs only", width=18,
+                                      command=self.toggle_cluster)
+        self.cluster_btn.pack(side="left", padx=8)
         self.count = ttk.Label(frow, text="")
         self.count.pack(side="left")
         tf = ttk.Frame(right)
@@ -209,6 +208,12 @@ class App(tk.Tk):
         rest = [f"{k}: {v}" for k, v in attrs.items()]
         rest.append(f"{len(r['codes'])} RPO codes, looked up {r.get('lookup_date')}")
         self.sub.config(text="   ·   ".join(rest))
+        self.fill()
+
+    def toggle_cluster(self):
+        on = not self.cluster_var.get()
+        self.cluster_var.set(on)
+        self.cluster_btn.config(text="Show all RPOs" if on else "Cluster RPOs only")
         self.fill()
 
     def visible_codes(self):
