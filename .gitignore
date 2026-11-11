@@ -1,5 +1,8 @@
 # vin_rpo: real VIN output, browser profile, captures
 data/vin_rpo/
+# j2534_can: captured CAN logs from vehicles
+data/j2534_can/
+can_logs/
 tools/vin_rpo/.profile/
 dist/
 build/
