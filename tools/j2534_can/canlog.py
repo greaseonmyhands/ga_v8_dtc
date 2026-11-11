@@ -188,8 +188,12 @@ class LogWriter:
         self.start_wall = time.time() if start_wall is None else start_wall
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
-        if stem is None:
-            stem = "can_" + datetime.fromtimestamp(self.start_wall).strftime("%Y%m%d_%H%M%S")
+        if stem is None:   # named for when logging started; never overwrite an earlier pair
+            base = stem = "can_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            n = 1
+            while (folder / f"{stem}.csv").exists() or (folder / f"{stem}.log").exists():
+                n += 1
+                stem = f"{base}_{n}"
         self.csv_path = folder / f"{stem}.csv"
         self.log_path = folder / f"{stem}.log"
         self._csv_file = open(self.csv_path, "w", newline="", encoding="utf-8")
@@ -197,6 +201,7 @@ class LogWriter:
         self._csv = csv.writer(self._csv_file)
         self._csv.writerow(CSV_HEADER)
         self.count = 0
+        self.closed = False
 
     def write(self, f: Frame):
         self._csv.writerow(csv_row(f, self.start_wall))
@@ -208,6 +213,7 @@ class LogWriter:
         self._log_file.flush()
 
     def close(self):
+        self.closed = True
         for fh in (self._csv_file, self._log_file):
             try:
                 fh.close()
@@ -295,8 +301,10 @@ class Session:
         self.buses = tuple(buses)
         self.on_frames = on_frames          # called on the worker thread with a list of frames
         self.on_event = on_event            # ("opened", notes) / ("closed", error or None)
-        self.log_factory = log_factory      # () -> LogWriter, called once the device is open
-        self.log = None
+        self.log_factory = log_factory      # () -> LogWriter: log from the first frame on
+        self.log = None                     # the open LogWriter while logging, else None
+        self.start_wall = time.time()       # wall-clock time of frame time 0
+        self._log_lock = threading.Lock()
         self.tx_enabled = False
         self.rx_count = 0
         self.tx_count = 0
@@ -347,6 +355,7 @@ class Session:
         try:
             try:
                 self.notes = list(self.backend.open(self.buses))
+                self.start_wall = time.time() - self.backend.now()
                 if self.log_factory:
                     self.log = self.log_factory()
             except Exception as e:
@@ -381,8 +390,10 @@ class Session:
                     self._dispatch(got)
                 else:
                     time.sleep(0.002)
-                if self.log and time.monotonic() - last_flush > 1.0:
-                    self.log.flush()
+                if time.monotonic() - last_flush > 1.0:
+                    with self._log_lock:
+                        if self.log:
+                            self.log.flush()
                     last_flush = time.monotonic()
         except Exception as e:
             err = str(e) if isinstance(e, BusError) else f"{type(e).__name__}: {e}"
@@ -393,8 +404,9 @@ class Session:
                 self.backend.close()
             except Exception:
                 pass
-            if self.log:
-                self.log.close()
+            with self._log_lock:   # keep self.log so callers can read what was saved
+                if self.log:
+                    self.log.close()
             while True:   # release anyone still waiting on a send
                 try:
                     box = self._txq.get_nowait()[5]
@@ -406,10 +418,28 @@ class Session:
                 self._cond.notify_all()
             self._emit("closed", err)
 
+    # ------------------------------------------------------------------ logging
+    def start_log(self, folder) -> LogWriter:
+        """Start writing frames to a new .csv/.log pair in folder. Frames that arrived
+        before this call are not written. Raises OSError if the files cannot be made."""
+        with self._log_lock:
+            if self.log is None or self.log.closed:
+                self.log = LogWriter(folder, start_wall=self.start_wall)
+            return self.log
+
+    def stop_log(self):
+        """Close the current log files. Returns the LogWriter that was closed, or None."""
+        with self._log_lock:
+            log, self.log = self.log, None
+            if log:
+                log.close()
+        return log
+
     def _dispatch(self, frames):
-        if self.log:
-            for f in frames:
-                self.log.write(f)
+        with self._log_lock:
+            if self.log and not self.log.closed:
+                for f in frames:
+                    self.log.write(f)
         with self._cond:
             for f in frames:
                 self._seq += 1

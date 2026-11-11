@@ -2,7 +2,7 @@
 
 Double-click to run (needs 32-bit Python for real devices; the simulator works anywhere).
 Receive only until you click "Enable transmit". Every capture is written to a .csv and a
-candump .log as it runs.
+candump .log while "Start logging" is on.
 
     can_pro.pyw --probe V200 --bus LS --seconds 5     receive-only console check, no window
     can_pro.pyw --selftest                            run the simulator briefly, write a report
@@ -70,6 +70,8 @@ class App(tk.Tk):
         self.sorted_keys: list = []    # keys currently shown in the overwrite view
         self.rows: deque = deque()     # item ids in the scrolling view
         self.skipped = 0
+        self.log_on = False            # "Start logging" pressed; off until the user asks
+        self.saved_logs: list = []     # files written during the current capture
         self.sort_col = None           # column the table is sorted by; None = arrival / ID order
         self.sort_rev = False
         self.sort_due = False          # rows changed since the last sort
@@ -115,6 +117,8 @@ class App(tk.Tk):
         self.view_btn = ttk.Button(row, text="Overwrite view", width=15, command=self.toggle_view)
         self.view_btn.pack(side="left", padx=6)
         ttk.Button(row, text="Clear", width=7, command=self.clear).pack(side="left")
+        self.log_btn = ttk.Button(row, text="Start logging", width=13, command=self.toggle_log)
+        self.log_btn.pack(side="left", padx=(6, 0))
         ttk.Button(row, text="Open log folder", command=self.open_folder).pack(side="left", padx=6)
         self.count = ttk.Label(row, text="")
         self.count.pack(side="left", padx=6)
@@ -383,7 +387,8 @@ class App(tk.Tk):
             backend, buses,
             on_frames=lambda frames: q.put(("frames", s, frames)),
             on_event=lambda kind, arg: q.put((kind, s, arg)),
-            log_factory=lambda: canlog.LogWriter(self.data_dir))
+            log_factory=(lambda: canlog.LogWriter(self.data_dir)) if self.log_on else None)
+        self.saved_logs = []
         self.start_btn.config(state="disabled")
         for w in (self.dev_box, self.bus_box, self.rescan_btn):
             w.config(state="disabled")
@@ -404,11 +409,47 @@ class App(tk.Tk):
         if err:
             self.status.set("Stopped: " + err.splitlines()[0])
             messagebox.showerror("CAN PRO", err, parent=self)
-        elif s and s.log:
+        elif s:
+            if s.log:                      # still logging when the capture ended
+                self.note_saved(s.log)
             self.status.set(f"Stopped. {s.rx_count} received, {s.tx_count} sent. "
-                            f"Saved {s.log.csv_path.name} and {s.log.log_path.name}")
+                            + ("Saved " + ", ".join(self.saved_logs) + "." if self.saved_logs
+                               else "Nothing was logged."))
         else:
             self.status.set("Stopped.")
+
+    # ------------------------------------------------------------------ logging
+    def note_saved(self, log):
+        self.saved_logs.append(f"{log.csv_path.name} + .log ({log.count} frames)")
+
+    def toggle_log(self):
+        """Start logging / Stop logging. Off by default; each start makes a new file pair.
+        Pressed before a capture, it arms logging so the capture logs from its first frame."""
+        s = self.session
+        if self.log_on:
+            self.log_on = False
+            self.log_btn.config(text="Start logging")
+            log = s.stop_log() if s else None
+            if log:
+                self.note_saved(log)
+                self.status.set(f"Logging stopped. Saved {log.csv_path.name} and "
+                                f"{log.log_path.name} ({log.count} frames).")
+            else:
+                self.status.set("Logging is off.")
+            return
+        if s and s.running:
+            try:
+                log = s.start_log(self.data_dir)
+            except OSError as e:
+                messagebox.showerror("Start logging",
+                                     f"Could not create the log files in {self.data_dir}: {e}",
+                                     parent=self)
+                return
+            self.status.set(f"Logging to {log.csv_path.name} + .log from now on.")
+        else:
+            self.status.set("Logging is on: the next capture will be saved from its first frame.")
+        self.log_on = True
+        self.log_btn.config(text="Stop logging")
 
     # ----------------------------------------------------------------- transmit
     def toggle_tx(self):
@@ -546,7 +587,8 @@ class App(tk.Tk):
         if not self.paused:
             self.rebuild()
         elif self.session:
-            self.status.set("Display paused. The log file is still recording every frame.")
+            self.status.set("Display paused." + (" The log file is still recording every frame."
+                                                  if self.log_on else ""))
 
     def toggle_view(self):
         self.overwrite = not self.overwrite
@@ -711,8 +753,10 @@ class App(tk.Tk):
             self.count.config(text="")
             return
         t = f"{s.rx_count} received · {s.tx_count} sent · {len(self.by_id)} IDs"
+        log = s.log
+        t += f" · logging ({log.count} saved)" if log and not log.closed else " · not logging"
         if self.skipped and not self.overwrite:
-            t += f" · {self.skipped} not drawn (all are in the log)"
+            t += f" · {self.skipped} not drawn"
         self.count.config(text=t)
 
     def open_folder(self):
@@ -749,7 +793,8 @@ class App(tk.Tk):
                     if self.send_bus.get() not in s.buses:
                         self.send_bus.set(s.buses[0])
                     self.send_bus_box.config(values=s.buses)
-                    log = f"  Logging to {s.log.csv_path.name} + .log" if s.log else ""
+                    log = (f"  Logging to {s.log.csv_path.name} + .log" if s.log
+                           else "  Not logging: press Start logging to save frames.")
                     self.status.set("Capturing, receive only. " + "; ".join(arg) + "." + log)
                 elif kind == "closed":
                     if frames:
