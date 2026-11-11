@@ -82,11 +82,15 @@ class App(tk.Tk):
         ttk.Label(frow, text="Filter:").pack(side="left")
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *a: self.fill())
-        ttk.Entry(frow, textvariable=self.filter_var, width=28).pack(side="left", padx=6)
+        self.filter_entry = ttk.Entry(frow, textvariable=self.filter_var, width=28)
+        self.filter_entry.pack(side="left", padx=6)
         ttk.Button(frow, text="Copy codes", command=self.copy_codes).pack(side="left")
         self.cluster_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frow, text="Cluster RPOs only", style="Toolbutton",
-                        variable=self.cluster_var, command=self.fill).pack(side="left", padx=10)
+        # A push-button style toggle: raised when off, pressed-in and tinted when on.
+        tk.Checkbutton(frow, text="Cluster RPOs only", variable=self.cluster_var,
+                       command=self.fill, indicatoron=False, relief="raised", borderwidth=2,
+                       padx=10, pady=2, selectcolor="#cfe3f7", cursor="hand2",
+                       font=("Segoe UI", 9)).pack(side="left", padx=10)
         self.count = ttk.Label(frow, text="")
         self.count.pack(side="left")
         tf = ttk.Frame(right)
@@ -109,9 +113,76 @@ class App(tk.Tk):
         self.status = tk.StringVar(value="Ready.")
         ttk.Label(self, textvariable=self.status, padding=(10, 6), anchor="w").pack(fill="x")
 
+        self.table.bind("<Button-1>", lambda e: self.table.focus_set(), add="+")
+        self.table.bind("<Control-a>", lambda e: (self.table.tag_add("sel", "1.0", "end-1c"), "break")[1])
+        for w in (self.entry, self.filter_entry):
+            w.bind("<Button-3>", self.entry_menu)
+        self.table.bind("<Button-3>", self.table_menu)
+        self.saved.bind("<Button-3>", self.saved_menu)
+
         self.reload_saved()
         self.entry.focus_set()
         self.after(100, self.pump)
+
+    # -------------------------------------------------------------- right-click
+    def popup(self, event, items):
+        m = tk.Menu(self, tearoff=0)
+        for item in items:
+            if item is None:
+                m.add_separator()
+            else:
+                label, cmd, enabled = item
+                m.add_command(label=label, command=cmd, state="normal" if enabled else "disabled")
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+        return "break"
+
+    def clip_has_text(self) -> bool:
+        try:
+            return bool(self.clipboard_get())
+        except tk.TclError:
+            return False
+
+    def entry_menu(self, event):
+        w = event.widget
+        w.focus_set()
+        sel = w.selection_present()
+        return self.popup(event, [
+            ("Cut", lambda: w.event_generate("<<Cut>>"), sel),
+            ("Copy", lambda: w.event_generate("<<Copy>>"), sel),
+            ("Paste", lambda: w.event_generate("<<Paste>>"), self.clip_has_text()),
+            None,
+            ("Select all", lambda: w.selection_range(0, "end"), bool(w.get())),
+        ])
+
+    def table_menu(self, event):
+        t = self.table
+        t.focus_set()
+        sel = bool(t.tag_ranges("sel"))
+        line = t.get(f"@{event.x},{event.y} linestart", f"@{event.x},{event.y} lineend")
+        code = line.split("\t")[0] if "\t" in line else ""
+        return self.popup(event, [
+            ("Copy", lambda: self.set_clip(t.get("sel.first", "sel.last")), sel),
+            (f"Copy code {code}" if code else "Copy code", lambda: self.set_clip(code), bool(code)),
+            ("Copy this row", lambda: self.set_clip(line.replace("\t", "  ")), bool(code)),
+            None,
+            ("Copy all shown codes", self.copy_codes, bool(self.current)),
+            ("Select all", lambda: t.tag_add("sel", "1.0", "end-1c"), bool(self.current)),
+        ])
+
+    def saved_menu(self, event):
+        i = self.saved.nearest(event.y)
+        if i < 0 or not self.saved.size():
+            return "break"
+        vin = self.saved.get(i)
+        return self.popup(event, [(f"Copy {vin}", lambda: self.set_clip(vin), True)])
+
+    def set_clip(self, text: str):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.status.set("Copied to the clipboard.")
 
     # ------------------------------------------------------------------ display
     def reload_saved(self):
