@@ -1,4 +1,4 @@
-# vin_rpo
+# RPO PRO (vin_rpo)
 
 Looks up the factory RPO codes for a GM VIN using the free decoder at
 <https://www.gmpartsgiant.com/vin-decoder.html>, by driving a real, visible Chrome window.
@@ -33,7 +33,7 @@ because the site showed a block page.
 
 ## Window app
 
-Double-click `tools/vin_rpo/VIN RPO Lookup.bat` (or `vin_rpo_gui.pyw` if `.pyw` files open with
+Double-click `tools/vin_rpo/RPO PRO.bat` (or `vin_rpo_gui.pyw` if `.pyw` files open with
 Python on your machine). Type one or more VINs, press Enter, and the codes show in a filterable
 table. Saved VINs are listed on the left and open without a lookup. It uses the same code, cache
 folder and stop-on-block behaviour as the command line.
@@ -51,7 +51,7 @@ back if the site needs you (CLI: `--minimized`). It is not headless mode.
 
 ## Standalone exe
 
-`tools\vin_rpo\build_exe.bat` builds `dist\VIN RPO Lookup.exe` (`pip install pyinstaller`
+`tools\vin_rpo\build_exe.bat` builds `dist\RPO PRO.exe` (`pip install pyinstaller`
 first). The exe needs no Python on the target PC, but it does need Google Chrome or Microsoft
 Edge installed (Chrome is tried first; Edge ships with Windows 10/11). It saves results in a
 `vin_rpo_data` folder beside the exe and keeps its browser profile in

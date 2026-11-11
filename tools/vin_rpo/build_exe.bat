@@ -1,7 +1,7 @@
 @echo off
-rem Builds dist\VIN RPO Lookup.exe  (needs: pip install playwright pyinstaller)
+rem Builds dist\RPO PRO.exe  (needs: pip install playwright pyinstaller)
 cd /d "%~dp0..\.."
-python -m PyInstaller --noconfirm --onefile --windowed --name "VIN RPO Lookup" ^
+python -m PyInstaller --noconfirm --onefile --windowed --name "RPO PRO" ^
   --icon "%CD%\tools\vin_rpo\vin_rpo.ico" ^
   --add-data "%CD%\tools\vin_rpo\vin_rpo.ico;." ^
   --paths tools\vin_rpo --collect-all playwright ^
