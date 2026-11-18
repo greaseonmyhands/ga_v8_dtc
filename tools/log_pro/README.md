@@ -101,8 +101,8 @@ The tab's safety rules:
 |---|---|---|
 | DBC load, search, PID list, live values, the three logging modes, settings restore | tested (window driven by script) | DBC decode of a bench capture: 88 of 90 IDs matched the GlobalA LS/HS DBCs |
 | GM truck set: broadcast decode | tested | **tested**, receive only: 19 of the 31 broadcast messages present on the bench decoded (speed 0 mph, temperatures 68 °F, baro 12.98 psi) |
-| Polling | tested: replies decoded; no reply → "waiting..."; NRC 31 → not supported; back-off | not yet |
-| Controls: run, stop, time limit, hold to run, refusals, capture stop | tested | not yet |
+| Polling | tested: replies decoded; no reply → "waiting..."; NRC 31 → not supported; back-off | **tested** from the window, after Start polling: 27 requests in 5 s to the ECM (`7E0`) and BCM (`241`), all answered with no timeouts. Values: catalyst temps 68 °F, tire pressures 31.9 psi. The ECM refused `$22 2501` (intake cam desired) with NRC 31, shown as "not supported" |
+| Controls: run, stop, time limit, hold to run, refusals, capture stop | tested | **Fans 50% tested** from the window: speed 0 mph was read from `3E9`; `AE 25 20 80` → `EE 25`; TesterPresent `3E` → `7E` after 2 s; Stop sent `AE 00` → `EE 00`, then `20` → `60`. The ECM accepted it, but the fan-speed signal stayed at 0 % (no fans on the bench). Other controls not run on hardware |
 | PID log opens in VCM Scanner | - | **tested** in VCM Scanner 5.2.3 (sample files): HP Tuners ids show as their channels; id 0 shows the file's name and unit |
 | `LOG PRO.exe` | builds; selftest ok (32-bit, devices listed, simulator); window opens | - |
 
