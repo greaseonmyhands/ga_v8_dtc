@@ -75,7 +75,7 @@ class HtmlFixture(unittest.TestCase):
 
     def test_codes(self):
         codes = [c["code"] for c in self.r["codes"]]
-        self.assertEqual(codes, ["1SZ", "R9N", "2WT", "4D7", "6B1", "A31", "A60", "AKO",
+        self.assertEqual(codes, ["LV3", "MYC", "1SZ", "R9N", "2WT", "4D7", "6B1", "A31", "A60", "AKO",
                                  "AQQ", "AXK", "AY0"])
         by = {c["code"]: c for c in self.r["codes"]}
         self.assertEqual(by["AKO"]["category"], "WNT")
@@ -102,9 +102,43 @@ class HtmlFixture(unittest.TestCase):
 class Cluster(unittest.TestCase):
     def test_subset(self):
         r = vin_rpo.parse_html(FIXTURE.read_text(encoding="utf-8"))
-        self.assertEqual([c["code"] for c in vin_rpo.cluster_codes(r)], ["AXK"])
+        self.assertEqual([c["code"] for c in vin_rpo.cluster_codes(r)], ["LV3", "MYC", "AXK"])
         self.assertEqual(len(vin_rpo.CLUSTER_RPOS), 99)
         self.assertTrue(all(len(c) == 3 for c in vin_rpo.CLUSTER_RPOS))
+
+
+class Powertrain(unittest.TestCase):
+    def r(self, engine, trans="6-Speed Automatic Transmission, HMD, 6L-80", year="2014", codes=()):
+        return {"catalog": {"YEAR_FROM": year}, "codes": [{"code": c} for c in codes],
+                "major_attributes": {"Engine": engine, "Transmission": trans}}
+
+    def codes(self, *a, **k):
+        return [c["code"] for c in vin_rpo.infer_powertrain(self.r(*a, **k))]
+
+    def test_decoder_texts_seen_live(self):
+        self.assertEqual(self.codes("6 Cyl 4.3L GEN 5, SIDI, VVT, OHV, E85 MAX, ALUM"), ["LV3", "MYC"])
+        self.assertEqual(self.codes("8 Cyl 5.3L SIDI VVT, AFM, E85 MAX", year="2015"), ["L83", "MYC"])
+
+    def test_iron_43_is_lv1(self):
+        self.assertEqual(self.codes("6 Cyl 4.3L SIDI, VVT, E85 MAX, IRON", trans=""), ["LV1"])
+
+    def test_6l90_is_myd(self):
+        self.assertEqual(self.codes("", trans="6-Speed Automatic, 6L90"), ["MYD"])
+
+    def test_unknown_or_ambiguous_text_infers_nothing(self):
+        self.assertEqual(self.codes("4 Cyl 2.7L Turbo", trans="8-Speed Automatic, 8L90"), [])
+        self.assertEqual(self.codes("6 Cyl 4.3L", trans=""), [])  # fits LV1 and LV3
+
+    def test_engine_outside_covered_years(self):
+        self.assertEqual(self.codes("8 Cyl 5.3L SIDI VVT, AFM, E85 MAX", year="2020"), ["MYC"])
+
+    def test_existing_code_not_duplicated_and_idempotent(self):
+        self.assertEqual(self.codes("8 Cyl 5.3L SIDI VVT, AFM, E85 MAX", codes=["L83"]), ["MYC"])
+        r = self.r("6 Cyl 4.3L GEN 5, SIDI, VVT, OHV, E85 MAX, ALUM")
+        vin_rpo.with_inferred(r)
+        vin_rpo.with_inferred(r)
+        self.assertEqual([c["code"] for c in r["codes"]], ["LV3", "MYC"])
+        self.assertTrue(all(c["inferred"] for c in r["codes"]))
 
 
 class ApiJson(unittest.TestCase):
@@ -143,7 +177,7 @@ class Cli(unittest.TestCase):
             self.assertIn("AKO  WINDOW TYPE PRIVACY", buf.getvalue())
             lines = (Path(d) / f"{FAKE_VIN}.csv").read_text(encoding="utf-8").splitlines()
             self.assertEqual(lines[0], "vin,code,category,description")
-            self.assertEqual(len(lines), 12)
+            self.assertEqual(len(lines), 14)  # header + 11 option rows + LV3 + MYC
 
     def test_from_html(self):
         buf = io.StringIO()

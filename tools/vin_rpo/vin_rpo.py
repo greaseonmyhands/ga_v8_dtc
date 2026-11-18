@@ -47,6 +47,72 @@ def cluster_codes(result: dict) -> list[dict]:
     """The subset of a result's codes that the cluster XML files reference."""
     return [c for c in result.get("codes") or [] if c["code"] in CLUSTER_RPOS]
 
+
+# ----------------------------------------------------------- engine / transmission
+# The decoder lists engine and transmission only as text under "Major Attribute", never as
+# RPO rows. The engine text is GM's own RPO description, lightly reworded, so it can be
+# matched against the RPO definitions. Definitions below are copied from the "Schematics
+# RPO Code List" in the 2014 Chevrolet Silverado 1500 service manual (lemon-manuals.la),
+# which covers the K2 trucks; only model years 2014-2018 are matched.
+ENGINE_RPOS = {
+    "LV1": "GAS, 6 CYL, 4.3L, SIDI, V6, VVT, E85 MAX, IRON",          # Mexico only
+    "LV3": "GAS, 6 CYL, 4.3L, GEN 5, SIDI, V6, VVT, OHV, E85 MAX, ALUM",
+    "L83": "GAS, 8 CYL, 5.3L, SIDI VVT, AFM, E85 MAX, ALUM, GM",
+    "L86": "GAS, 8 CYL, 6.2L, SIDI VVT, AFM, E85 MAX, ALUM, GM",
+}
+ENGINE_YEARS = range(2014, 2019)
+# The manual's 6L80/6L90 section is titled "6L80 (MYC) Or 6L90 (MYD)".
+TRANS_RPOS = {
+    "MYC": (re.compile(r"\b6L-?80\b", re.I), "6L80 6-SPEED AUTOMATIC"),
+    "MYD": (re.compile(r"\b6L-?90\b", re.I), "6L90 6-SPEED AUTOMATIC"),
+}
+_IGNORE_TOKENS = {"GAS", "GM", "V6", "V8"}
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.split(r"[\s,]+", (text or "").upper()) if t and t not in _IGNORE_TOKENS}
+
+
+def _model_year(result: dict) -> int | None:
+    for src in ((result.get("catalog") or {}).get("YEAR_FROM"), result.get("vehicle")):
+        m = re.search(r"\b(19|20)\d{2}\b", str(src or ""))
+        if m:
+            return int(m.group(0))
+    return None
+
+
+def infer_powertrain(result: dict) -> list[dict]:
+    """Engine/transmission RPOs implied by the "Major Attribute" text (not in the option list).
+
+    Only returns a code when exactly one definition fits; anything unrecognised is left out.
+    """
+    attrs = result.get("major_attributes") or {}
+    have = {c["code"] for c in result.get("codes") or []}
+    out = []
+    engine = attrs.get("Engine") or ""
+    if engine and _model_year(result) in ENGINE_YEARS:
+        words = _tokens(engine)
+        fits = [rpo for rpo, desc in ENGINE_RPOS.items() if words and words <= _tokens(desc)]
+        if len(fits) == 1 and fits[0] not in have:
+            out.append({"code": fits[0], "description": ENGINE_RPOS[fits[0]], "category": "ENG",
+                        "inferred": True, "basis": f"Engine: {engine}"})
+    trans = attrs.get("Transmission") or ""
+    fits = [rpo for rpo, (pat, _) in TRANS_RPOS.items() if pat.search(trans)]
+    if len(fits) == 1 and fits[0] not in have:
+        out.append({"code": fits[0], "description": TRANS_RPOS[fits[0]][1], "category": "TRN",
+                    "inferred": True, "basis": f"Transmission: {trans}"})
+    return out
+
+
+INFERRED_TAG = "   [inferred from engine/transmission text]"
+
+
+def with_inferred(result: dict) -> dict:
+    """Add inferred engine/transmission codes to result["codes"] (in place, idempotent)."""
+    result.setdefault("codes", [])
+    result["codes"][:0] = infer_powertrain(result)
+    return result
+
 DECODER_URL = "https://www.gmpartsgiant.com/vin-decoder.html"
 API_PATH = "/api/vehicle/mul/decode-vin-attributes"
 
@@ -151,7 +217,7 @@ def parse_api_json(payload: dict, vin: str | None = None) -> dict:
                     rows("majorAttribute"), rows("specification"))
     if not result["codes"]:
         raise NoResultError("decoder returned a vehicle but no option rows")
-    return result
+    return with_inferred(result)
 
 
 class _DecoderHTML(HTMLParser):
@@ -249,7 +315,7 @@ def parse_html(html: str, vin: str | None = None) -> dict:
     result = _build(vin, vehicle, info, by_title.get("major attribute", []), spec)
     if not result["codes"]:
         raise NoResultError("results section present but no RPO rows parsed")
-    return result
+    return with_inferred(result)
 
 
 # --------------------------------------------------------------------------- live
@@ -352,14 +418,14 @@ def print_result(r: dict, out=None, cluster_only: bool = False) -> None:
             print(f"  {k}: {v}", file=out)
         print(f"  {len(hits)} cluster-relevant RPO codes (of {len(r['codes'])}):", file=out)
         for c in hits:
-            print(f"  {c['code']}  {c['description']}", file=out)
+            print(f"  {c['code']}  {c['description']}{INFERRED_TAG if c.get('inferred') else ''}", file=out)
         return
     print(f"\n{r['vin']}  {r.get('vehicle') or ''}", file=out)
     for k, v in (r.get("major_attributes") or {}).items():
         print(f"  {k}: {v}", file=out)
     print(f"  {len(r['codes'])} RPO codes (looked up {r.get('lookup_date')}):", file=out)
     for c in r["codes"]:
-        print(f"  {c['code']}  {c['description']}", file=out)
+        print(f"  {c['code']}  {c['description']}{INFERRED_TAG if c.get('inferred') else ''}", file=out)
 
 
 def write_csv(r: dict, path: Path) -> None:
@@ -414,7 +480,7 @@ def main(argv=None) -> int:
     for vin in vins:
         path = args.out_dir / f"{vin}.json"
         if path.exists() and not args.refresh:
-            r = json.loads(path.read_text(encoding="utf-8"))
+            r = with_inferred(json.loads(path.read_text(encoding="utf-8")))
             print(f"[cached] {path}")
             print_result(r, cluster_only=args.cluster)
             if args.csv:

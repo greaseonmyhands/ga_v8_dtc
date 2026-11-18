@@ -44,7 +44,10 @@ Window features: the VIN box forces capitals and shows a live `n / 17` count (re
 VIN is complete and its check digit is right); **Cluster RPOs only** narrows the table to the
 codes the gauge-cluster XML files reference (list in `CLUSTER_RPOS` in `vin_rpo.py`; the CLI
 has `--cluster`). The site lists engine and transmission only as text, not as RPO codes
-(no `LV3` / `MYC` rows), so check those yourself.
+(no `LV3` / `MYC` rows). The tool fills those in by matching that text against GM's RPO
+definitions (from the 2014 Silverado service manual's RPO list): LV1/LV3/L83/L86 for 2014-2018
+model years, MYC/MYD for 6L80/6L90. These rows are tagged "inferred" (`"inferred": true` in the
+JSON); text that doesn't match exactly one definition is left alone and the window says so.
 
 The window app always keeps the real browser window minimized during a lookup and brings it
 back if the site needs you (CLI: `--minimized`). It is not headless mode.
