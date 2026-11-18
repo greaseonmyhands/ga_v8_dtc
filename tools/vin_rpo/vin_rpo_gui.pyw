@@ -206,7 +206,7 @@ class App(tk.Tk):
             self.show(json.loads((self.data_dir / f"{self.saved.get(sel[0])}.json").read_text("utf-8")))
 
     def show(self, r: dict):
-        self.current = r
+        self.current = vin_rpo.with_inferred(r)  # saved files from before inference get it too
         self.csv_btn.config(state="normal")
         attrs = dict(r.get("major_attributes") or {})
         engine = attrs.pop("Engine", None) or "not listed"
@@ -245,17 +245,24 @@ class App(tk.Tk):
                                    f"of {len(self.current['codes'])}")
             if only:
                 attrs = self.current.get("major_attributes") or {}
-                t.insert("end", "Engine and transmission RPOs (LV3, MYC, ...) are not in this "
-                                "site's option list, only as text: "
-                                f"{attrs.get('Engine', '?')} / {attrs.get('Transmission', '?')}. "
-                                "Check those codes yourself.\n", "note")
+                got = {c["category"] for c in self.current["codes"] if c.get("inferred")}
+                missing = [label for cat, label in (("ENG", "Engine"), ("TRN", "Transmission"))
+                           if cat not in got]
+                if got:
+                    t.insert("end", "Engine/transmission codes marked \"inferred\" come from the "
+                                    "decoder's text, matched to GM's RPO definitions.\n", "note")
+                if missing:
+                    t.insert("end", " and ".join(missing) + " RPO could not be worked out from: "
+                                    + " / ".join(attrs.get(m, "?") for m in missing)
+                                    + ". Check it yourself.\n", "note")
                 if not rows:
                     t.insert("end", "None of the cluster-relevant RPOs are in this VIN's list.\n", "note")
             for c in rows:
                 tags = ("code", "cluster", "row") if c["code"] in vin_rpo.CLUSTER_RPOS else ("code", "row")
                 t.insert("end", c["code"], tags)
                 t.insert("end", "\t" + c["description"], ("row",))
-                t.insert("end", "   " + c["category"].lower() + "\n", ("cat", "row"))
+                cat = c["category"].lower() + ("  · inferred" if c.get("inferred") else "")
+                t.insert("end", "   " + cat + "\n", ("cat", "row"))
         else:
             self.count.config(text="")
         t.configure(state="disabled")
