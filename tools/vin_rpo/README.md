@@ -20,7 +20,7 @@ not your everyday profile, so it works while your normal Chrome is open.
 python tools/vin_rpo/vin_rpo.py <VIN> [<VIN>...]      # print codes, write data/vin_rpo/<VIN>.json
 python tools/vin_rpo/vin_rpo.py <VIN> --csv           # also write data/vin_rpo/<VIN>.csv
 python tools/vin_rpo/vin_rpo.py <VIN> --refresh       # ignore the cached JSON
-python tools/vin_rpo/vin_rpo.py --from-html page.html # parse a saved results page, no browser
+python tools/vin_rpo/vin_rpo.py --import page.mhtml   # import a page saved in your own browser
 ```
 
 - VINs are validated first (17 characters, no I/O/Q, check digit); a bad one exits before any
@@ -29,7 +29,7 @@ python tools/vin_rpo/vin_rpo.py --from-html page.html # parse a saved results pa
 - Lookups run one at a time with a pause between them (`--delay`, default 5 s, minimum 3 s).
 
 Exit codes: `0` ok, `1` a VIN had no result, `2` bad input / Playwright missing, `3` stopped
-because the site showed a block page.
+because the site showed a block page, or live lookups are paused after one (see below).
 
 ## Window app
 
@@ -85,8 +85,20 @@ rendered rows). It never calls the API on its own.
 ## If the site blocks it
 
 If a CAPTCHA, block page, login wall or 403/429 shows up, the tool stops, names the VIN it
-stopped at and leaves the Chrome window open so you can finish that lookup by hand. It does not
-solve CAPTCHAs and uses no stealth plugins, fingerprint spoofing or proxies. Don't add them.
+stopped at and brings the browser window up. It does not solve CAPTCHAs and uses no stealth
+plugins, fingerprint spoofing or proxies. Don't add them.
+
+Since 2026-11-23 gmpartsgiant.com's firewall has been blocking the automated browser with a
+"Web Page Blocked! ... Attack ID" page, which also locks your connection out of the site for a
+few minutes in your normal browser. Ordinary browsing by hand still works afterwards. So:
+
+- After a block the tool records it (`site_blocked.txt` in the data folder) and pauses live
+  lookups for 24 hours: the window asks before trying again, the CLI refuses unless you pass
+  `--ignore-block`. Saved VINs still open as usual. A successful lookup clears the record.
+- **Manual route:** look the VIN up yourself on the decoder page in your normal browser, wait
+  until the codes show, save the page with Ctrl+S as **Webpage, Single File** (`.mhtml`), then
+  click **Import saved page** in the window (CLI: `--import <file>`). It is parsed and saved
+  exactly like a lookup, with `"source": "saved-page"`.
 
 ## Tests
 

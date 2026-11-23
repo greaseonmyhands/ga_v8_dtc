@@ -70,6 +70,9 @@ class App(tk.Tk):
         self.saved = tk.Listbox(left, font=("Consolas", 10), width=20, height=6, exportselection=False)
         self.saved.pack(fill="both", expand=True)
         self.saved.bind("<<ListboxSelect>>", self.on_saved)
+        # For when the site blocks the automated browser: look the VIN up yourself, save the
+        # page, and import it here.
+        ttk.Button(left, text="Import saved page", command=self.import_saved).pack(fill="x", pady=(8, 0))
         ttk.Button(left, text="Open data folder", command=self.open_folder).pack(fill="x", pady=8)
         body.add(left, weight=0)
 
@@ -316,6 +319,57 @@ class App(tk.Tk):
             return
         self.status.set(f"Saved {path}")
 
+    def import_saved(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self, title="Import a saved gmpartsgiant.com results page",
+            filetypes=[("Saved web page", "*.mhtml *.mht *.html *.htm"), ("All files", "*.*")])
+        if not path:
+            return
+        toks = self.vin_var.get().replace(",", " ").split()
+        fallback = toks[0] if len(toks) == 1 else None
+        try:
+            r = vin_rpo.import_page(Path(path), fallback)
+        except vin_rpo.BlockedError:
+            messagebox.showerror("Import saved page", "That saved page is the site's block page, "
+                                 "not a results page.", parent=self)
+            return
+        except (vin_rpo.NoResultError, ValueError, OSError) as e:
+            messagebox.showerror(
+                "Import saved page",
+                f"Could not read RPO codes from that file.\n\n{e}\n\nSave the results page in "
+                "your browser with Ctrl+S and choose 'Webpage, Single File' (.mhtml), after the "
+                "codes are showing on the page.", parent=self)
+            return
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        dest = self.data_dir / f"{r['vin']}.json"
+        if dest.exists() and not messagebox.askokcancel(
+                "Import saved page", f"{r['vin']} is already saved. Replace it with the imported "
+                "page?", parent=self):
+            return
+        dest.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")
+        self.show(r)
+        self.reload_saved()
+        self.status.set(f"{r['vin']}: {len(r['codes'])} codes imported from {Path(path).name}")
+
+    def blocked_ok(self, vins, refresh) -> bool:
+        """After a recent block, ask before any live lookup (each attempt renews the block)."""
+        need_live = [v for v in vins if refresh or not (self.data_dir / f"{v}.json").exists()]
+        blocked = vin_rpo.recent_block(self.data_dir)
+        if not need_live or not blocked:
+            return True
+        ok = messagebox.askyesno(
+            "Site blocked recent lookups",
+            f"gmpartsgiant.com blocked RPO PRO's automated browser at {blocked[0]:%I:%M %p on %b %d}. "
+            "Trying again will most likely get you blocked again for a few minutes, including in "
+            "your normal browser.\n\n"
+            "Instead: open the decoder in your normal browser, look the VIN up, save the page with "
+            "Ctrl+S as 'Webpage, Single File', then click Import saved page.\n\n"
+            "Try the automated lookup anyway?", icon="warning", default="no", parent=self)
+        if not ok:
+            self.status.set("Live lookup skipped: the site blocked a lookup in the last 24 hours.")
+        return ok
+
     def start(self, refresh=False):
         if self.busy:
             return
@@ -332,6 +386,8 @@ class App(tk.Tk):
             vins = list(dict.fromkeys(vin_rpo.validate_vin(v) for v in raw))
         except ValueError as e:
             messagebox.showerror("Invalid VIN", str(e), parent=self)
+            return
+        if not self.blocked_ok(vins, refresh):
             return
         self.busy = True
         self.btn.config(state="disabled")
@@ -372,19 +428,25 @@ class App(tk.Tk):
                         try:
                             r = vin_rpo.lookup_live(page, vin)
                         except vin_rpo.BlockedError as e:
+                            vin_rpo.record_block(self.data_dir, str(e))
                             vin_rpo.set_window_state(page, "normal")
                             gate = threading.Event()
                             say("blocked", gate,
-                                f"Stopped at {vin}: {e}\n\nThe site is asking for something this "
-                                "tool will not do (CAPTCHA / block page / login). Finish this "
-                                "lookup by hand in the browser window that just came up.\n\n"
+                                f"Stopped at {vin}: {e}\n\ngmpartsgiant.com blocked the automated "
+                                "lookup. RPO PRO will not retry or try to get around it, and will "
+                                "ask before trying again in the next 24 hours.\n\n"
+                                "To get this VIN anyway: open the decoder in your normal browser "
+                                "(the site may take a few minutes to let you back in), look the "
+                                "VIN up, save the page with Ctrl+S as 'Webpage, Single File', "
+                                "then click Import saved page.\n\n"
                                 f"Not looked up: {' '.join(todo[i:])}\n\n"
-                                "Click OK when you are done to close that browser window.")
+                                "Click OK to close the automated browser window.")
                             gate.wait()
                             return say("done", None)
                         except vin_rpo.NoResultError as e:
                             say("status", f"{vin}: no result - {e}")
                             continue
+                        vin_rpo.clear_block(self.data_dir)  # a lookup worked: block is over
                         r = vin_rpo.finish(r, vin, f"{vin_rpo.DECODER_URL}?vin={vin}")
                         path = self.data_dir / f"{vin}.json"
                         path.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")
