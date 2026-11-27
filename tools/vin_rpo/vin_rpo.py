@@ -125,7 +125,16 @@ _MULTI_SPLIT_RE = re.compile(r";(?=\s*[A-Z0-9]{3}-)")
 _BLOCK_MARKERS = (
     "captcha", "are you a human", "verify you are human", "access denied",
     "unusual traffic", "attention required", "just a moment", "request blocked",
+    # gmpartsgiant.com's firewall page (seen 2026-11): "Web Page Blocked! The page cannot be
+    # displayed. Please contact the administrator ... Attack ID: ...". It can come back as an
+    # ordinary page, not an HTTP error, so it has to be recognised by its text.
+    "web page blocked", "page cannot be displayed", "attack id:",
 )
+
+# After the site blocks a lookup, live lookups are refused for this long unless the user
+# explicitly says to try anyway. Each automated attempt while blocked just renews the block.
+BLOCK_COOLDOWN = _dt.timedelta(hours=24)
+BLOCK_FILE_NAME = "site_blocked.txt"
 
 
 class BlockedError(RuntimeError):
@@ -295,6 +304,66 @@ def looks_blocked(title: str, text: str) -> str | None:
     return None
 
 
+def record_block(data_dir: Path, reason: str) -> None:
+    """Remember that the site blocked an automated lookup (see BLOCK_COOLDOWN)."""
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / BLOCK_FILE_NAME).write_text(
+            f"{_dt.datetime.now().isoformat(timespec='seconds')}\n{reason}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def recent_block(data_dir: Path, now: _dt.datetime | None = None):
+    """(when, reason) if the site blocked a lookup within BLOCK_COOLDOWN, else None."""
+    try:
+        lines = (data_dir / BLOCK_FILE_NAME).read_text(encoding="utf-8").splitlines()
+        when = _dt.datetime.fromisoformat(lines[0].strip())
+    except (OSError, ValueError, IndexError):
+        return None
+    if (now or _dt.datetime.now()) - when > BLOCK_COOLDOWN:
+        return None
+    return when, (lines[1] if len(lines) > 1 else "")
+
+
+def clear_block(data_dir: Path) -> None:
+    try:
+        (data_dir / BLOCK_FILE_NAME).unlink()
+    except OSError:
+        pass
+
+
+def load_saved_page(path: Path) -> str:
+    """HTML from a results page saved in a normal browser: .html/.htm ("Webpage, Complete")
+    or .mhtml/.mht ("Webpage, Single File", which keeps the page exactly as displayed)."""
+    data = Path(path).read_bytes()
+    if Path(path).suffix.lower() in (".mhtml", ".mht") or data[:400].lower().find(b"multipart/related") >= 0:
+        import email
+        import email.policy
+        msg = email.message_from_bytes(data, policy=email.policy.default)
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                # Chrome often leaves the charset off this part; the page itself is UTF-8.
+                raw = part.get_payload(decode=True) or b""
+                return raw.decode(part.get_content_charset() or "utf-8", errors="replace")
+        raise NoResultError("no web page found inside that .mhtml file")
+    return data.decode("utf-8", errors="replace")
+
+
+def import_page(path: Path, fallback_vin: str | None = None) -> dict:
+    """Parse a results page the user saved from their own browser into a normal result."""
+    r = parse_html(load_saved_page(path))  # raises BlockedError / NoResultError
+    vin = r.get("vin") or fallback_vin
+    if not vin:
+        raise NoResultError("the saved page does not show which VIN it is for; "
+                            "type the VIN in the box and import again")
+    vin = validate_vin(vin)
+    r = finish(r, vin, f"{DECODER_URL}?vin={vin}")
+    r["source"] = "saved-page"
+    r["imported_from"] = Path(path).name
+    return r
+
+
 def parse_html(html: str, vin: str | None = None) -> dict:
     """Parse a saved copy of the rendered results page (vin-decoder.html?vin=...)."""
     p = _DecoderHTML()
@@ -448,8 +517,11 @@ def main(argv=None) -> int:
     ap.add_argument("--delay", type=float, default=5.0,
                     help="seconds to pause between live lookups (default 5, minimum 3)")
     ap.add_argument("--out-dir", type=Path, default=DATA_DIR)
-    ap.add_argument("--from-html", type=Path, metavar="FILE",
-                    help="parse a saved results page instead of opening the browser")
+    ap.add_argument("--from-html", "--import", dest="from_html", type=Path, metavar="FILE",
+                    help="import a results page saved from your own browser (.html or .mhtml) "
+                         "instead of opening the browser; saves it like a lookup")
+    ap.add_argument("--ignore-block", action="store_true",
+                    help="look up even though the site blocked a lookup in the last 24 hours")
     args = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -457,14 +529,17 @@ def main(argv=None) -> int:
 
     if args.from_html:
         try:
-            r = parse_html(args.from_html.read_text(encoding="utf-8", errors="replace"),
-                           args.vins[0].upper() if args.vins else None)
-        except (BlockedError, NoResultError) as e:
+            r = import_page(args.from_html, args.vins[0] if args.vins else None)
+        except (BlockedError, NoResultError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        r = finish(r, r["vin"] or "UNKNOWN", str(args.from_html))
-        r["source"] = "html-file"
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        path = args.out_dir / f"{r['vin']}.json"
+        path.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")
         print_result(r, cluster_only=args.cluster)
+        print(f"  -> {path}")
+        if args.csv:
+            write_csv(r, path.with_suffix(".csv"))
         return 0
 
     if not args.vins:
@@ -490,6 +565,17 @@ def main(argv=None) -> int:
     if not todo:
         return 0
 
+    blocked = recent_block(args.out_dir)
+    if blocked and not args.ignore_block:
+        print(f"\nNot looked up: {' '.join(todo)}\n"
+              f"gmpartsgiant.com blocked an automated lookup at {blocked[0]:%Y-%m-%d %H:%M}, so "
+              "live lookups are paused for 24 hours (each attempt renews their block).\n"
+              f"Look the VIN up in your normal browser at {DECODER_URL}?vin=<VIN>, save the page "
+              "with Ctrl+S as 'Webpage, Single File', then run:\n"
+              "  python tools/vin_rpo/vin_rpo.py --import <saved file>\n"
+              "(--ignore-block tries the automated lookup anyway.)", file=sys.stderr)
+        return 3
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -508,11 +594,13 @@ def main(argv=None) -> int:
                     r = lookup_live(page, vin)
                 except BlockedError as e:
                     left = todo[i:]
+                    record_block(args.out_dir, str(e))
                     set_window_state(page, "normal")
                     print(f"\nSTOPPED at {vin}: {e}\n"
-                          "The site is asking for something this tool will not do (CAPTCHA / "
-                          "block page / login).\nFinish this lookup by hand in the open browser "
-                          f"window: {DECODER_URL}?vin={vin}\n"
+                          "The site blocked the automated lookup. This tool will not retry or try "
+                          "to get around it, and pauses live lookups for 24 hours.\n"
+                          f"Look it up in your normal browser instead ({DECODER_URL}?vin={vin}), "
+                          "save the page as 'Webpage, Single File' and use --import.\n"
                           f"Not looked up: {' '.join(left)}", file=sys.stderr)
                     if sys.stdin.isatty():
                         input("Press Enter to close the browser... ")
@@ -521,6 +609,7 @@ def main(argv=None) -> int:
                     print(f"\n{vin}: no result - {e}", file=sys.stderr)
                     failed.append(vin)
                     continue
+                clear_block(args.out_dir)  # a lookup worked, so the block is over
                 r = finish(r, vin, f"{DECODER_URL}?vin={vin}")
                 path = args.out_dir / f"{vin}.json"
                 path.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")

@@ -2,12 +2,13 @@
 
 Run:  python -m unittest discover -s tests -v     (also works under pytest)
 """
+import datetime
 import io
 import json
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,12 +180,106 @@ class Cli(unittest.TestCase):
             self.assertEqual(lines[0], "vin,code,category,description")
             self.assertEqual(len(lines), 14)  # header + 11 option rows + LV3 + MYC
 
-    def test_from_html(self):
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            rc = vin_rpo.main(["--from-html", str(FIXTURE)])
-        self.assertEqual(rc, 0)
-        self.assertIn(FAKE_VIN, buf.getvalue())
+    def test_from_html_imports_and_saves(self):
+        with tempfile.TemporaryDirectory() as d:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = vin_rpo.main(["--import", str(FIXTURE), "--out-dir", d])
+            self.assertEqual(rc, 0)
+            self.assertIn(FAKE_VIN, buf.getvalue())
+            saved = json.loads((Path(d) / f"{FAKE_VIN}.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["source"], "saved-page")
+            self.assertEqual(saved["imported_from"], FIXTURE.name)
+
+    def test_recent_block_pauses_live_lookup_before_browser(self):
+        with tempfile.TemporaryDirectory() as d:
+            vin_rpo.record_block(Path(d), "page looks like a block page")
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = vin_rpo.main([FAKE_VIN, "--out-dir", d])
+            self.assertEqual(rc, 3)
+            self.assertIn("blocked an automated lookup", err.getvalue())
+
+    def test_cache_hit_still_works_while_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            vin_rpo.record_block(Path(d), "x")
+            r = vin_rpo.finish(vin_rpo.parse_html(FIXTURE.read_text(encoding="utf-8")),
+                               FAKE_VIN, "fixture")
+            (Path(d) / f"{FAKE_VIN}.json").write_text(json.dumps(r), encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(vin_rpo.main([FAKE_VIN, "--out-dir", d]), 0)
+
+
+# Shaped like the firewall page gmpartsgiant.com showed in 2026-11 (IP and IDs made up).
+FIREWALL_PAGE = """<html><head><title></title></head><body>
+<table><tr><td><img src="x.gif"></td><td><h1>Web Page Blocked!</h1>
+<p>The page cannot be displayed. Please contact the administrator for additional information.</p>
+<p>URL: www.gmpartsgiant.com/vin-decoder.html?vin=1GCNCPEHXEZ000000</p>
+<p>Client IP: 192.0.2.1<br>Attack ID: 20000000<br>Message ID: 000000000000</p>
+</td></tr></table></body></html>"""
+
+
+class SiteBlock(unittest.TestCase):
+    def test_firewall_page_is_a_block_not_a_missing_result(self):
+        with self.assertRaises(vin_rpo.BlockedError):
+            vin_rpo.parse_html(FIREWALL_PAGE)
+        self.assertIsNotNone(vin_rpo.looks_blocked("", "Web Page Blocked! The page cannot be displayed."))
+
+    def test_cooldown_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            self.assertIsNone(vin_rpo.recent_block(d))
+            vin_rpo.record_block(d, "matched 'web page blocked'")
+            when, reason = vin_rpo.recent_block(d)
+            self.assertIn("web page blocked", reason)
+            later = when + vin_rpo.BLOCK_COOLDOWN + datetime.timedelta(minutes=1)
+            self.assertIsNone(vin_rpo.recent_block(d, now=later))
+            vin_rpo.clear_block(d)
+            self.assertIsNone(vin_rpo.recent_block(d))
+            # The marker must not show up as a saved VIN (the window lists *.json).
+            vin_rpo.record_block(d, "x")
+            self.assertEqual(list(d.glob("*.json")), [])
+
+
+class ImportSavedPage(unittest.TestCase):
+    def _mhtml(self, html: str) -> bytes:
+        # Laid out the way Chrome's "Webpage, Single File" is: multipart/related, with the
+        # page as a quoted-printable text/html part.
+        import quopri
+        body = quopri.encodestring(html.encode("utf-8"))
+        b = b"----MultipartBoundary--test"
+        return (b"From: <Saved by Blink>\r\nSubject: Free GM VIN Decoder | GMPartsGiant\r\n"
+                b"MIME-Version: 1.0\r\nContent-Type: multipart/related;\r\n\ttype=\"text/html\";\r\n"
+                b"\tboundary=\"" + b + b"\"\r\n\r\n--" + b + b"\r\n"
+                b"Content-Type: text/html\r\nContent-ID: <frame-1@mhtml.blink>\r\n"
+                b"Content-Transfer-Encoding: quoted-printable\r\n"
+                b"Content-Location: https://www.gmpartsgiant.com/vin-decoder.html?vin=x\r\n\r\n"
+                + body + b"\r\n--" + b + b"--\r\n")
+
+    def test_mhtml(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "VIN Decoder.mhtml"
+            p.write_bytes(self._mhtml(FIXTURE.read_text(encoding="utf-8")))
+            r = vin_rpo.import_page(p)
+            self.assertEqual(r["vin"], FAKE_VIN)
+            self.assertIn("AKO", [c["code"] for c in r["codes"]])
+            self.assertEqual(r["source_url"], f"{vin_rpo.DECODER_URL}?vin={FAKE_VIN}")
+
+    def test_vin_from_box_when_page_lacks_it(self):
+        html = FIXTURE.read_text(encoding="utf-8").replace("Your VIN:", "Vehicle:")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "page.html"
+            p.write_text(html, encoding="utf-8")
+            with self.assertRaises(vin_rpo.NoResultError):
+                vin_rpo.import_page(p)
+            self.assertEqual(vin_rpo.import_page(p, "1gcncpehxez000000")["vin"], FAKE_VIN)
+
+    def test_saved_block_page_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "blocked.html"
+            p.write_text(FIREWALL_PAGE, encoding="utf-8")
+            with self.assertRaises(vin_rpo.BlockedError):
+                vin_rpo.import_page(p)
 
 
 if __name__ == "__main__":
